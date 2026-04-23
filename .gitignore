@@ -1,0 +1,62 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ── VOLTA runtime ─────────────────────────────────────────────────────────────
+.volta/
+*.db
+output/
+renders/
+assets/raw/
+
+# ── Secrets / env ─────────────────────────────────────────────────────────────
+.env
+*.pem
+*.key
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── Test / coverage ───────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ── Large binary assets (use Gitea LFS) ──────────────────────────────────────
+*.fbx
+*.obj
+*.glb
+*.gltf
+*.abc
+*.uasset
+*.umap
+*.mp4
+*.mov
+*.avi
+*.exr
+*.hdr
+*.tga
+*.psd
+
+# ── Workflows (commit .gitkeep, not generated files) ─────────────────────────
+workflows/*.json
+
+# ── HIK / MB templates (commit templates, not exports) ───────────────────────
+templates/hik/*.fbx
+templates/mb_scripts/*.log
