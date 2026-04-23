@@ -417,3 +417,157 @@ def run(
         "  Use individual commands per stage: "
         "generate → mesh → rig → mocap → qa → export"
     )
+
+
+# ── bridge (ATLAS integration) ────────────────────────────────────────────────
+
+@cli.group()
+def bridge() -> None:
+    """ATLAS ↔ VOLTA bridge — status reporting and task dispatch."""
+
+
+@bridge.command(name="sync")
+@click.option(
+    "--db",
+    type=click.Path(),
+    default=str(DEFAULT_DB),
+    show_default=True,
+    help="Catalog database path.",
+)
+def bridge_sync(db: str) -> None:
+    """Update .atlas-bridge/memory.json with current state.
+
+    ATLAS reads this file on every ``python main.py bridge-sync``
+    run. Call this after any significant pipeline work to keep
+    ATLAS informed.
+    """
+    from volta.bridge.sync import sync
+
+    memory = sync(db_path=Path(db))
+    health = memory.get("health", {})
+    console.print(
+        f"[green]Bridge synced.[/green]  "
+        f"Health: {health.get('status', '?')}  |  "
+        f"Assets: {memory['metrics']['total_assets']}  |  "
+        f"Stage runs: {memory['metrics']['stage_runs']}"
+    )
+    alerts = memory.get("alerts", [])
+    for a in alerts:
+        icon = (
+            "[red]●[/red]"
+            if a["severity"] == "critical"
+            else "[yellow]●[/yellow]"
+            if a["severity"] == "warning"
+            else "[cyan]●[/cyan]"
+        )
+        console.print(f"  {icon} {a['message']}")
+
+
+@bridge.command(name="status")
+def bridge_status() -> None:
+    """Print the current .atlas-bridge/memory.json (what ATLAS sees)."""
+    from volta.bridge.sync import _BRIDGE_DIR
+    import json as _json
+
+    mem_path = _BRIDGE_DIR / "memory.json"
+    man_path = _BRIDGE_DIR / "manifest.json"
+    if not mem_path.exists():
+        console.print(
+            "[red]ERROR[/red] memory.json not found. "
+            "Run: volta bridge sync"
+        )
+        sys.exit(1)
+
+    with mem_path.open("r", encoding="utf-8") as f:
+        memory = _json.load(f)
+    with man_path.open("r", encoding="utf-8") as f:
+        manifest = _json.load(f)
+
+    health = memory.get("health", {})
+    t = Table(
+        title="VOLTA Bridge Status", show_header=True
+    )
+    t.add_column("Field", style="cyan")
+    t.add_column("Value")
+    t.add_row("Project", manifest.get("project_name", "?"))
+    t.add_row("Status", memory.get("status_summary", "?"))
+    t.add_row(
+        "Health", health.get("status", "unknown")
+    )
+    t.add_row(
+        "Days since push",
+        str(health.get("days_since_push", -1)),
+    )
+    t.add_row(
+        "Last updated",
+        memory.get("last_updated", "never"),
+    )
+    t.add_row(
+        "Last ATLAS sync",
+        memory.get("last_atlas_sync") or "not yet",
+    )
+    t.add_row(
+        "Sessions",
+        str(memory.get("session_count", 0)),
+    )
+    t.add_row(
+        "Open tasks",
+        str(len(memory.get("open_tasks", []))),
+    )
+    console.print(t)
+
+    alerts = memory.get("alerts", [])
+    if alerts:
+        console.print("\n[bold]Alerts:[/bold]")
+        for a in alerts:
+            icon = (
+                "[red]CRIT[/red]"
+                if a["severity"] == "critical"
+                else "[yellow]WARN[/yellow]"
+                if a["severity"] == "warning"
+                else "[cyan]INFO[/cyan]"
+            )
+            state = (
+                "[dim](resolved)[/dim]"
+                if a.get("resolved")
+                else ""
+            )
+            console.print(
+                f"  {icon} {a['message']} {state}"
+            )
+
+    caps = manifest.get("capabilities", [])
+    if caps:
+        console.print(
+            f"\n[dim]Capabilities: "
+            f"{', '.join(caps)}[/dim]"
+        )
+
+
+@bridge.command(name="tasks")
+def bridge_tasks() -> None:
+    """List pending TaskRequests dispatched from ATLAS."""
+    from volta.bridge.sync import read_tasks
+
+    tasks = read_tasks()
+    if not tasks:
+        console.print(
+            "[dim]No pending tasks from ATLAS.[/dim]"
+        )
+        return
+    t = Table(
+        title=f"ATLAS Tasks ({len(tasks)})",
+        show_header=True,
+    )
+    t.add_column("ID", style="dim")
+    t.add_column("Priority")
+    t.add_column("Title")
+    t.add_column("Created")
+    for task in tasks:
+        t.add_row(
+            task.get("task_id", "?")[:12],
+            task.get("priority", "normal"),
+            task.get("title", ""),
+            task.get("created_at", "")[:10],
+        )
+    console.print(t)

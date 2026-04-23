@@ -1,0 +1,43 @@
+{
+  "status_summary": "VOLTA Phase 1 \u2014 0 asset(s), 0 stage run(s)",
+  "health": {
+    "status": "active",
+    "days_since_push": 0,
+    "open_pr_count": 0
+  },
+  "last_updated": "2026-04-22T17:35:44",
+  "last_atlas_sync": null,
+  "session_count": 1,
+  "alerts": [],
+  "open_tasks": [
+    {
+      "id": "volta-phase2-retopo",
+      "description": "Phase 2: Retopology + UV + LOD pipeline",
+      "priority": 3,
+      "owner": "Andy",
+      "created_at": "2026-04-22T00:00:00"
+    },
+    {
+      "id": "volta-phase2-accurig",
+      "description": "Phase 2: AccuRig CLI subprocess integration",
+      "priority": 3,
+      "owner": "Andy",
+      "created_at": "2026-04-22T00:00:00"
+    },
+    {
+      "id": "volta-phase2-cascadeur",
+      "description": "Phase 2: Cascadeur headless mocap cleanup",
+      "priority": 2,
+      "owner": "Andy",
+      "created_at": "2026-04-22T00:00:00"
+    }
+  ],
+  "metrics": {
+    "total_assets": 0,
+    "stage_runs": 0,
+    "qa_fails": 0,
+    "qa_warns": 0,
+    "phases_complete": 1,
+    "pipeline_stages": 12
+  }
+}

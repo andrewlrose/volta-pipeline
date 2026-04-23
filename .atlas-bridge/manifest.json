@@ -1,0 +1,23 @@
+{
+  "project_name": "VOLTA",
+  "project_path": "e:\\dev\\projects\\Volta",
+  "stack": "python",
+  "bridge_version": "1.0",
+  "pm_type": "cli",
+  "agent_count": 0,
+  "agent_names": ["volta-pipeline"],
+  "task_board_path": "TASK_BOARD.md",
+  "working_context_path": "",
+  "dev_url": null,
+  "test_count": 0,
+  "capabilities": [
+    "concept_art_generation",
+    "style_consistency",
+    "image_to_3d",
+    "mocap_ingest",
+    "hik_rig_management",
+    "qa_validation",
+    "social_export",
+    "catalog_tracking"
+  ]
+}
