@@ -1,11 +1,11 @@
 {
-  "status_summary": "VOLTA Phase 1 \u2014 0 asset(s), 0 stage run(s)",
+  "status_summary": "VOLTA Phase 1 complete \u2014 0 assets ingested. Round 2 Q&A locked; CuddlePirates confirmed as first demo IP. 8-item execution path active: items 2\u20136 pending (runner.py, approval, per-project catalog, cost telemetry, K3 rig update).",
   "health": {
     "status": "active",
     "days_since_push": 0,
     "open_pr_count": 0
   },
-  "last_updated": "2026-04-22T17:35:44",
+  "last_updated": "2026-04-26T00:00:00",
   "last_atlas_sync": null,
   "session_count": 1,
   "alerts": [],
@@ -30,6 +30,41 @@
       "priority": 2,
       "owner": "Andy",
       "created_at": "2026-04-22T00:00:00"
+    },
+    {
+      "id": "volta-runner",
+      "description": "Build volta/runner.py — full-pipeline orchestrator with archive-on-rerun + auto-cascade (8-item path item 2)",
+      "priority": 1,
+      "owner": "Andy",
+      "created_at": "2026-04-26T00:00:00"
+    },
+    {
+      "id": "volta-approval",
+      "description": "Add approval_status to Asset model + volta approve/reject CLI enforced for HERO-tier assets (8-item path item 3)",
+      "priority": 1,
+      "owner": "Andy",
+      "created_at": "2026-04-26T00:00:00"
+    },
+    {
+      "id": "volta-per-project-catalog",
+      "description": "Per-project catalog: wire <project>/.volta/ as default db; update CLI DEFAULT_DB to project-relative path (8-item path item 4; confirmed M3)",
+      "priority": 2,
+      "owner": "Andy",
+      "created_at": "2026-04-26T00:00:00"
+    },
+    {
+      "id": "volta-cost-telemetry",
+      "description": "Meshy + ComfyUI cost telemetry: track spend per stage run; surface in ATLAS daily briefing (8-item path item 5)",
+      "priority": 2,
+      "owner": "Andy",
+      "created_at": "2026-04-26T00:00:00"
+    },
+    {
+      "id": "volta-k3-rig-update",
+      "description": "Update rigging module + CLI: custom stylized rigs are default; HIK/MetaHuman is fallback abstraction seam only. Reflects K3 lock 2026-04-25 (8-item path item 6)",
+      "priority": 2,
+      "owner": "Andy",
+      "created_at": "2026-04-26T00:00:00"
     }
   ],
   "metrics": {
