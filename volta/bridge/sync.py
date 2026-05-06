@@ -260,7 +260,7 @@ def read_tasks(
     if not path.exists():
         return []
     tasks: list[dict] = []
-    with path.open("r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8-sig") as f:
         for i, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -272,3 +272,64 @@ def read_tasks(
                     "tasks.jsonl line %d invalid JSON: %s", i, exc
                 )
     return tasks
+
+
+def update_task_status(
+    task_id: str,
+    new_status: str,
+    bridge_dir: Optional[Path] = None,
+) -> bool:
+    """Update the ``status`` field of one task in tasks.jsonl.
+
+    Rewrites the file atomically via a temp-file swap so a partial
+    write never corrupts the queue.  Returns True if the task was found
+    and updated, False otherwise.
+
+    Both key names used across ATLAS formats are checked:
+    ``id`` (dashboard / simplified) and ``task_request_id``
+    (full Bridge Protocol).
+    """
+    bdir = bridge_dir or _BRIDGE_DIR
+    path = bdir / "tasks.jsonl"
+    if not path.exists():
+        return False
+
+    lines: list[str] = []
+    found = False
+    with path.open("r", encoding="utf-8") as f:
+        for raw in f:
+            raw_stripped = raw.strip()
+            if not raw_stripped:
+                lines.append(raw)
+                continue
+            try:
+                task = json.loads(raw_stripped)
+                tid = task.get("id") or task.get(
+                    "task_request_id", ""
+                )
+                if tid == task_id:
+                    task["status"] = new_status
+                    lines.append(json.dumps(task) + "\n")
+                    found = True
+                    continue
+            except json.JSONDecodeError:
+                pass
+            lines.append(raw)
+
+    if not found:
+        return False
+
+    # Atomic write via tempfile in same directory
+    try:
+        fd, tmp = tempfile.mkstemp(
+            dir=str(bdir), suffix=".tmp"
+        )
+        with open(fd, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        Path(tmp).replace(path)
+    except (OSError, IOError) as exc:
+        logger.error(
+            "Failed to rewrite tasks.jsonl: %s", exc
+        )
+        return False
+    return True

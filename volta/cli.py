@@ -571,3 +571,140 @@ def bridge_tasks() -> None:
             task.get("created_at", "")[:10],
         )
     console.print(t)
+
+
+# ── bridge exec ───────────────────────────────────────────────────────────────
+
+
+def _task_id(task: dict) -> str:
+    """Return the task identifier regardless of which key ATLAS used."""
+    return task.get("id") or task.get("task_request_id", "")
+
+
+def _task_text(task: dict) -> str:
+    """Return the human-readable task description."""
+    return task.get("task") or task.get("title") or "(no description)"
+
+
+@bridge.command(name="exec")
+@click.option(
+    "--done",
+    default=None,
+    metavar="TASK_ID",
+    help="Mark a task as done by its ID prefix.",
+)
+@click.option(
+    "--watch",
+    is_flag=True,
+    default=False,
+    help="Poll every 10s and print new tasks as they arrive.",
+)
+def bridge_exec(done: Optional[str], watch: bool) -> None:
+    """Process pending ATLAS tasks — print briefs and mark in-progress.
+
+    On each run this command:
+
+    1. Reads all tasks in .atlas-bridge/tasks.jsonl
+    2. Prints every ``pending`` task with its full brief
+    3. Marks each found pending task as ``in_progress``
+
+    Open this project in VS Code (``code .``) and start a Copilot
+    session to execute the brief shown.  When the work is done,
+    run::
+
+        volta bridge exec --done <TASK_ID>
+
+    to mark the task ``done`` so the ATLAS receipt strip updates.
+
+    Use ``--watch`` to keep polling for new tasks every 10s
+    (useful when ATLAS is actively dispatching).
+    """
+    import time as _time
+    from volta.bridge.sync import read_tasks, update_task_status
+
+    if done:
+        # Mark a specific task done
+        tasks = read_tasks()
+        match = next(
+            (t for t in tasks if _task_id(t).startswith(done)),
+            None,
+        )
+        if match is None:
+            console.print(
+                f"[red]No task found matching ID prefix:[/red] {done}"
+            )
+            sys.exit(1)
+        tid = _task_id(match)
+        if update_task_status(tid, "done"):
+            console.print(
+                f"[green]Marked done:[/green] {tid[:16]}…"
+            )
+            console.print(
+                f"  Task: {_task_text(match)[:80]}"
+            )
+        else:
+            console.print(
+                f"[red]Could not update status for[/red] {tid}"
+            )
+        return
+
+    seen_ids: set[str] = set()
+
+    def _process_once() -> int:
+        tasks = read_tasks()
+        pending = [
+            t for t in tasks
+            if t.get("status") == "pending"
+            and _task_id(t) not in seen_ids
+        ]
+        for task in pending:
+            tid = _task_id(task)
+            seen_ids.add(tid)
+            update_task_status(tid, "in_progress")
+            console.rule(
+                f"[bold cyan]ATLAS Task[/bold cyan] "
+                f"[dim]{tid[:16]}[/dim]"
+            )
+            console.print(
+                f"[bold]Project:[/bold] "
+                f"{task.get('project', 'VOLTA')}"
+            )
+            console.print(
+                f"[bold]Dispatched:[/bold] "
+                f"{task.get('created_at', '')[:16]} UTC"
+            )
+            console.print(
+                f"[bold]Priority:[/bold] "
+                f"{task.get('priority', 'normal')}"
+            )
+            console.print()
+            console.print(
+                "[bold]Brief:[/bold]"
+            )
+            console.print(_task_text(task))
+            console.print()
+            console.print(
+                "[dim]Status set to in_progress. "
+                "Run `volta bridge exec --done "
+                f"{tid[:8]}` when complete.[/dim]"
+            )
+        return len(pending)
+
+    found = _process_once()
+    if found == 0 and not watch:
+        console.print(
+            "[dim]No pending ATLAS tasks.[/dim]"
+        )
+        return
+
+    if watch:
+        console.print(
+            "[dim]Watching for new tasks "
+            "(Ctrl-C to stop)...[/dim]"
+        )
+        try:
+            while True:
+                _time.sleep(10)
+                _process_once()
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped.[/dim]")
