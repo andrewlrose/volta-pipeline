@@ -54,8 +54,9 @@ htmlcov/
 *.tga
 *.psd
 
-# ── Workflows (commit .gitkeep, not generated files) ─────────────────────────
+# ── Workflows (commit templates, not user-generated outputs) ─────────────────
 workflows/*.json
+!workflows/bsm_concept_v0.json
 
 # ── HIK / MB templates (commit templates, not exports) ───────────────────────
 templates/hik/*.fbx

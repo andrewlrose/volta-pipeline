@@ -58,7 +58,7 @@ def ingest_bvh(bvh_path: Path) -> dict:
     """
     validate_mocap_file(bvh_path)
     frame_count = 0
-    fps = 60.0
+    fps = 0.0  # 0 = not yet parsed from file
     with bvh_path.open() as f:
         for line in f:
             stripped = line.strip()
@@ -77,6 +77,8 @@ def ingest_bvh(bvh_path: Path) -> dict:
                 )
             if frame_count and fps:
                 break
+    if fps == 0.0:
+        fps = 60.0  # fallback when Frame Time absent
     return {
         "frame_count": frame_count,
         "fps": fps,

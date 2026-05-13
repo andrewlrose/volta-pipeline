@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 from typing import Optional
@@ -11,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from volta.catalog import CatalogDB
-from volta.models import PipelineStage
+from volta.models import AssetType, PipelineStage
 from volta.qa.validators import qa_passed, run_qa_suite
 
 
@@ -277,6 +278,136 @@ def mocap(
     if clean:
         console.print(
             "[yellow]NOTE[/yellow] Cascadeur cleanup is Phase 2."
+        )
+
+
+# ── mocap-scan ────────────────────────────────────────────────────────────────
+
+@cli.command("mocap-scan")
+@click.argument(
+    "library_dir",
+    type=click.Path(
+        exists=True, file_okay=False, path_type=Path
+    ),
+)
+@click.option(
+    "--db",
+    type=click.Path(),
+    default=str(DEFAULT_DB),
+    show_default=True,
+    help="Catalog database path.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print results without writing to catalog.",
+)
+def mocap_scan(
+    library_dir: Path, db: str, dry_run: bool
+) -> None:
+    """Bulk-register BVH/FBX motions from a library directory."""
+    from volta.mocap.ingest import (
+        SUPPORTED_FORMATS,
+        ingest_bvh,
+    )
+    from volta.models import Asset, AssetTier
+
+    files = sorted(
+        f
+        for f in library_dir.rglob("*")
+        if f.is_file()
+        and f.suffix.lower() in SUPPORTED_FORMATS
+    )
+
+    if not files:
+        console.print(
+            f"[yellow]No motion files found in:[/yellow] "
+            f"{library_dir}"
+        )
+        return
+
+    t = Table(
+        title=f"Mocap Library — {library_dir}",
+        show_header=True,
+    )
+    t.add_column("Name", style="cyan")
+    t.add_column("Fmt", no_wrap=True)
+    t.add_column("Frames", justify="right")
+    t.add_column("FPS", justify="right")
+    t.add_column("Duration", justify="right")
+    t.add_column("Status")
+
+    catalog = CatalogDB(Path(db))
+    if not dry_run:
+        catalog.init()
+
+    registered = 0
+    errors = 0
+
+    for motion_file in files:
+        suffix = motion_file.suffix.lower()
+        frames_str = fps_str = dur_str = "—"
+        try:
+            notes = ""
+            if suffix == ".bvh":
+                meta = ingest_bvh(motion_file)
+                frames_str = str(meta["frame_count"])
+                fps_str = f"{meta['fps']:.0f}"
+                dur_str = f"{meta['duration_s']:.1f}s"
+                notes = (
+                    f"{meta['frame_count']} frames "
+                    f"@ {meta['fps']:.0f} fps "
+                    f"({meta['duration_s']:.1f}s)"
+                )
+
+            if not dry_run:
+                h = hashlib.sha256()
+                with motion_file.open("rb") as fh:
+                    h.update(fh.read(65_536))
+                file_hash = h.hexdigest()
+
+                asset = Asset(
+                    uid=Asset.uid_from_path(motion_file),
+                    name=motion_file.stem,
+                    asset_type=AssetType.MOTION,
+                    stage=PipelineStage.MOCAP,
+                    file_path=str(motion_file.resolve()),
+                    file_hash=file_hash,
+                    file_size=motion_file.stat().st_size,
+                    tier=AssetTier.MID,
+                    notes=notes,
+                )
+                with catalog.session() as conn:
+                    catalog.upsert_asset(conn, asset)
+                registered += 1
+                status_str = "[green]registered[/green]"
+            else:
+                status_str = "[dim]dry-run[/dim]"
+
+        except Exception as exc:  # noqa: BLE001
+            errors += 1
+            status_str = f"[red]ERROR: {exc}[/red]"
+
+        t.add_row(
+            motion_file.stem,
+            suffix.lstrip(".").upper(),
+            frames_str,
+            fps_str,
+            dur_str,
+            status_str,
+        )
+
+    console.print(t)
+    if not dry_run:
+        console.print(
+            f"\n[green]Done.[/green] "
+            f"{registered} registered, {errors} errors."
+        )
+    else:
+        console.print(
+            f"\n[dim]Dry run — {len(files)} files found, "
+            f"none written to catalog.[/dim]"
         )
 
 
