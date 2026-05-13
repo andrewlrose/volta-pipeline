@@ -1,10 +1,32 @@
 # VOLTA
 
-**AI animation pipeline — concept art to game/film export.**
+**Built by Andrew Rose** — Motion Capture Post Supervisor on Avatar,
+The Lion King, Mufasa, The Jungle Book, and Sony's PS5 catalog
+(The Last of Us, God of War, Spider-Man, and others).
+Two-time Academy Award recipient for Best Visual Effects.
 
-VOLTA orchestrates every stage of a character/environment
-production pipeline, connecting AI generation tools, DCC
-applications, and delivery targets through a single CLI.
+VOLTA is an AI-assisted virtual production pipeline: concept art
+to game/film delivery, hybrid AI and DCC, orchestrated through a
+single CLI. It's the pipeline I wish I'd had on Avatar, Lion King,
+and Mufasa.
+
+---
+
+## About the Author
+
+Andrew Rose has spent 25+ years embedded in every major production
+technology transition of the last two decades — performance capture
+on *The Polar Express* (2004), Simulcam development at Lightstorm
+on *Avatar* (2007–2009), photoreal virtual production on *The Jungle
+Book*, and virtual production as the primary methodology on *The
+Lion King* and *Mufasa* at MPC. His game credits span the Sony PS5
+catalog: The Last of Us I & II, God of War I & II, Spider-Man 1 & 2,
+Days Gone, Uncharted 3, and more. He currently supervises mocap
+post at Lightspeed LA.
+
+VOLTA is built from that experience — a real, running pipeline for
+hybrid AI/DCC production, built alongside a day job, because the
+tools now exist to make it possible.
 
 ---
 
