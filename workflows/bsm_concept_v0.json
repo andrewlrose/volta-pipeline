@@ -4,22 +4,55 @@
     "description": "Bear Suit Man Ep1 concept generation. Locked for style-bible pass.",
     "version": "0.1.0",
     "locked": false,
+    "hardware": "RTX 3070 Laptop (8GB VRAM)",
+    "model": "flux1-schnell GGUF Q8_0 — fits 8GB; faster iteration than dev",
+    "setup": [
+      "1. Install ComfyUI portable: https://github.com/comfyanonymous/ComfyUI/releases (download ComfyUI_windows_portable)",
+      "2. Install ComfyUI-GGUF custom node: ComfyUI/custom_nodes/ -> git clone https://github.com/city96/ComfyUI-GGUF",
+      "3. Download flux1-schnell-Q8_0.gguf (~12GB) OR flux1-schnell-Q5_K_S.gguf (~8GB, faster load) from:",
+      "   https://huggingface.co/city96/FLUX.1-schnell-gguf — no license gate, free download",
+      "   Place in: ComfyUI/models/unet/",
+      "4. Download text encoders (needed by all Flux workflows):",
+      "   clip_l.safetensors -> https://huggingface.co/comfyanonymous/flux_text_encoders",
+      "   t5xxl_fp8_e4m3fn.safetensors -> same repo (fp8 version fits 8GB)",
+      "   Place both in: ComfyUI/models/clip/",
+      "5. Download VAE: ae.safetensors -> https://huggingface.co/black-forest-labs/FLUX.1-schnell (free)",
+      "   Place in: ComfyUI/models/vae/",
+      "6. Launch: .\\run_nvidia_gpu.bat --lowvram",
+      "7. Test: volta generate workflows/bsm_concept_v0.json"
+    ],
     "notes": "Replace positive_prompt text after style-bible.md is approved."
   },
   "1": {
     "id": 1,
-    "class_type": "CheckpointLoaderSimple",
+    "class_type": "UnetLoaderGGUF",
     "inputs": {
-      "ckpt_name": "flux1-dev.safetensors"
+      "unet_name": "flux1-schnell-Q8_0.gguf"
     },
-    "_comment": "Swap to flux1-schnell.safetensors for fast iteration drafts."
+    "_comment": "Requires ComfyUI-GGUF custom node. Use Q5_K_S variant to save ~4GB load time."
+  },
+  "1b": {
+    "id": 11,
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
+      "clip_name2": "clip_l.safetensors",
+      "type": "flux"
+    }
+  },
+  "1c": {
+    "id": 12,
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
   },
   "2": {
     "id": 2,
     "class_type": "CLIPTextEncode",
     "inputs": {
       "text": "bear proof suit man, supermarket cereal aisle, deadpan wide shot, fluorescent lighting, static locked-off camera, Roy Andersson color palette, pale desaturated tones, linoleum floor, institutional shelving",
-      "clip": ["1", 1]
+      "clip": ["11", 0]
     },
     "_comment": "REPLACE text after style-bible.md is locked. Keep aspect language: 'deadpan wide shot', 'locked-off camera'."
   },
@@ -28,9 +61,9 @@
     "class_type": "CLIPTextEncode",
     "inputs": {
       "text": "motion blur, depth of field bokeh, dramatic lighting, volumetric fog, cinematic lens flare, photorealistic human face, text, watermark, signature, blurry, bad anatomy",
-      "clip": ["1", 1]
+      "clip": ["11", 0]
     },
-    "_comment": "Negative prompt — preserve the anti-naturalistic Andersson flatness."
+    "_comment": "Flux.1-schnell ignores negative prompts at cfg=1.0 — kept for when cfg is raised during style tests."
   },
   "4": {
     "id": 4,
@@ -51,20 +84,20 @@
       "negative": ["3", 0],
       "latent_image": ["4", 0],
       "seed": 42,
-      "steps": 20,
-      "cfg": 7.0,
+      "steps": 4,
+      "cfg": 1.0,
       "sampler_name": "euler",
-      "scheduler": "normal",
+      "scheduler": "simple",
       "denoise": 1.0
     },
-    "_comment": "cfg 7.0 = balanced. Drop to 4.0–5.0 for more Flux-native expressiveness. Raise steps to 28 for final renders."
+    "_comment": "schnell REQUIRES cfg=1.0 and scheduler=simple. Steps 4 = full quality for schnell. Do NOT raise cfg — will degrade output."
   },
   "6": {
     "id": 6,
     "class_type": "VAEDecode",
     "inputs": {
       "samples": ["5", 0],
-      "vae": ["1", 2]
+      "vae": ["12", 0]
     }
   },
   "7": {
