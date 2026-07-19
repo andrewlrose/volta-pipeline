@@ -1,0 +1,59 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Volta — Audit Report</title><style>
+body{margin:0;background:#f6f8fb;color:#172033;font:16px/1.55 "Segoe UI",system-ui,sans-serif}main{max-width:1120px;margin:0 auto;padding:42px 28px 64px}h1{color:#0b3b63;font-size:2rem;line-height:1.15}h2{color:#174d75;border-bottom:1px solid #d9e3ee;padding-bottom:.25rem;margin-top:2rem}h3{color:#28445d}table{border-collapse:collapse;width:100%;background:white;margin:1rem 0;box-shadow:0 1px 2px #0f172a14}th,td{border:1px solid #d8e1eb;padding:.55rem .65rem;text-align:left;vertical-align:top}th{background:#eaf2f9}tr:nth-child(even) td{background:#fbfdff}code{background:#eaf0f6;border:1px solid #d7e1eb;border-radius:4px;padding:.05rem .28rem}.meta{color:#61708a;font-style:italic}.sev-high{color:#b00020;font-weight:700}.sev-med{color:#b26a00;font-weight:600}.sev-low{color:#3a6ea5}.sev-info{color:#2e7d32}
+</style></head><body><main>
+<h1>Volta — Audit Report</h1>
+<p class="meta">Fable creative/business portfolio audit — deep pass, 2026-07-07. Supersedes the 2026-07-07 19:36 shallow draft.</p>
+
+<h2>Executive Summary</h2>
+<p>Volta is SOFTWARE — confirmed: a real, installable Python package (~3,270 lines, 9 git commits, GitHub remote) implementing an AI-assisted virtual-production pipeline CLI. Phase 1 is honestly built and honestly scoped: working ComfyUI and Meshy clients, BVH mocap ingest, SQLite asset catalog, composable QA gates, FFmpeg social export, and an ATLAS bridge with proper atomic writes — while every Phase 2 feature is an explicit <code>NotImplementedError</code> stub with manual-workflow instructions instead of pretend code. All 25 tests pass (verified live in the audit sandbox). Repo hygiene is good: caches gitignored, secrets in <code>.env</code> only, remote configured. The real findings are three correctness/drift issues: the catalog default still points at <code>~/.volta/</code> despite the project's own load-bearing "per-project <code>.volta/</code>" decision; the Meshy client polls the wrong endpoint for text-to-3D tasks; and the bridge counts <em>every</em> task in <code>tasks.jsonl</code> as pending forever, ignoring the status field its own updater writes.</p>
+
+<h2>Findings</h2>
+<table>
+<tr><th>#</th><th>Issue</th><th>Location</th><th>Category</th><th>Severity</th><th>Recommended action</th><th>Status</th></tr>
+<tr><td>V-1</td><td><strong>Catalog path contradicts the project's own load-bearing decision.</strong> CLAUDE.md: per-project catalogs in each consumer's <code>.volta/</code>, "NOT <code>~/.volta/</code>". Code defaults: <code>cli.py:20</code>, <code>bridge/sync.py _DEFAULT_DB</code>, <code>.env.example</code> all point at <code>~/.volta/catalog.db</code>. Same class of drift as ATLAS's OBSIDIAN_VAULT_DIR lesson.</td><td><code>volta/cli.py:20</code>, <code>volta/bridge/sync.py</code>, <code>.env.example</code></td><td>architecture / data-ownership</td><td class="sev-med">Medium</td><td>One shared resolver (project-root <code>.volta/</code> default, <code>VOLTA_DB</code> override), imported everywhere — mirror ATLAS's <code>vault_env.py</code> pattern.</td><td>Flagged — config/behavior change</td></tr>
+<tr><td>V-2</td><td><strong>Meshy client polls the wrong endpoint for text tasks.</strong> <code>text_to_3d()</code> posts to <code>/v2/text-to-3d</code>, but <code>get_task()</code> (used by <code>wait_for_task</code>) always GETs <code>/v1/image-to-3d/{id}</code> — waiting on a text-to-3D task will 404/fail.</td><td><code>volta/meshy/client.py</code> <code>get_task()</code></td><td>deps-tests / external API</td><td class="sev-med">Medium</td><td>Track task type per submission (or accept an endpoint arg) and poll the matching endpoint.</td><td>Flagged — external API call</td></tr>
+<tr><td>V-3</td><td><strong>Bridge "pending tasks" alert never clears.</strong> <code>_pending_task_count()</code> counts every non-empty line of <code>tasks.jsonl</code> as pending; it never reads the <code>status</code> field that <code>update_task_status()</code> writes into the very same file.</td><td><code>volta/bridge/sync.py</code> <code>_pending_task_count()</code></td><td>dead code / correctness</td><td class="sev-med">Medium</td><td>Parse each line and count only non-terminal statuses (not <code>done</code>/<code>dismissed</code>).</td><td>Flagged — behavior change</td></tr>
+<tr><td>V-4</td><td><strong>Deprecated/inconsistent timestamps.</strong> <code>datetime.utcnow()</code> (deprecated 3.12+) in <code>catalog.py</code> and <code>qa/validators.py</code>; <code>compute_memory()</code> stamps naive local time while git-health math uses tz-aware UTC.</td><td><code>volta/catalog.py</code>, <code>volta/qa/validators.py</code>, <code>volta/bridge/sync.py</code></td><td>deps-tests</td><td class="sev-low">Low</td><td>Standardize on <code>datetime.now(timezone.utc)</code>.</td><td>Flagged — touches stored data formats</td></tr>
+<tr><td>V-5</td><td><strong>Local-first: one hard cloud dependency (Meshy), correctly isolated.</strong> ComfyUI is local-GPU; Meshy is cloud-only, confined to its own module but with no provider-neutral interface. Phase-2 keys are placeholders only — no LLM calls exist yet.</td><td><code>volta/meshy/client.py</code>, <code>.env.example</code></td><td>local-first</td><td class="sev-low">Low</td><td>Cheap now: a <code>MeshProvider</code> protocol so Meshy is one implementation; local alternatives (TripoSR-class) when hardware allows. Future LLM calls go through a gateway.</td><td>Flagged — roadmap [Local-First]</td></tr>
+<tr><td>V-6</td><td><strong>Catalog stores raw <code>file_path</code> strings; portability rule not enforced in schema.</strong> CLAUDE.md requires <code>{sha256, relative_path, source_root}</code> references — the <code>assets</code> table has <code>file_path TEXT</code>. Absolute <code>E:\...</code> paths won't survive the M6 migration.</td><td><code>volta/catalog.py</code> schema, <code>volta/models.py</code></td><td>data-ownership</td><td class="sev-med">Medium</td><td>Add <code>source_root</code> + relative-path columns (or normalize on write) before the catalog accumulates real assets.</td><td>Flagged — schema change</td></tr>
+<tr><td>V-7</td><td><strong>Positive: atomic writes done right.</strong> <code>write_memory()</code> and <code>update_task_status()</code> both use tempfile + <code>Path.replace()</code>. Honest Phase-2 stubs instead of silent no-ops.</td><td><code>volta/bridge/sync.py</code></td><td>architecture</td><td class="sev-info">Info</td><td>Use as the reference pattern for Writers_Room's WR-2 fix.</td><td>No action needed</td></tr>
+<tr><td>V-8</td><td><strong>Sandbox git status shows every tracked file as modified</strong> — consistent with the documented CRLF/mount artifact (ATLAS S269: 585 phantom modifications).</td><td>repo root</td><td>deps-tests</td><td class="sev-info">Info</td><td>Verify with native <code>git status</code> before any commit.</td><td>Flagged for native verification</td></tr>
+</table>
+
+<h3>Plain-language layer, finding by finding</h3>
+<ul>
+<li><strong>V-1:</strong> The project wrote down a rule for itself — "each production keeps its own asset catalog inside its own folder" — but the code still drops the catalog into one shared folder in the user's home directory. The household has been burned by exactly this kind of "one path, two meanings" drift before. Fix it while the catalog is nearly empty.</li>
+<li><strong>V-2:</strong> Ask Volta to generate a 3D model from <em>text</em> and it submits the job fine — then checks on it at the <em>image</em> jobs counter. The job succeeds on Meshy's side, but Volta would wait, get "no such job," and report failure.</li>
+<li><strong>V-3:</strong> The to-do inbox from ATLAS never empties: even after a task is marked done, the alert still says it's waiting. Annoying rather than dangerous — but it trains you to ignore alerts, which <em>is</em> dangerous.</li>
+<li><strong>V-4:</strong> Two slightly different clocks are used for record-keeping. Harmless today; confusing when comparing timestamps across machines later.</li>
+<li><strong>V-5:</strong> Only Meshy (the 3D-model generator) lives in the cloud, and it's neatly boxed into one file — 90% of the battle. The last 10% is a formal "any mesh generator plugs in here" interface so a future local model is a drop-in.</li>
+<li><strong>V-6:</strong> The asset catalog remembers files by their full Windows address. Move to the Linux server and every address breaks. The project's own docs already say to store portable references — the database just doesn't enforce it yet.</li>
+<li><strong>V-7:</strong> Good news: the file-writing safety habit ATLAS uses everywhere is already implemented correctly here. Other projects should copy this file.</li>
+<li><strong>V-8:</strong> The sandbox's view of git claims everything changed; that's a known illusion from Windows/Linux line-ending translation. Trust the native check.</li>
+</ul>
+
+<h2>Evolution Roadmap</h2>
+<table>
+<tr><th>Priority</th><th>Recommendation</th><th>Tags</th><th>Why this matters (plain language)</th></tr>
+<tr><td>1</td><td>Single catalog-path resolver: per-project <code>.volta/</code> default, one env override (V-1)</td><td>[Data-Ownership]</td><td>Prevents the exact "same variable, different meaning" drift that cost ATLAS multiple sessions to unwind.</td></tr>
+<tr><td>2</td><td>Portable asset references: <code>source_root</code> + relative paths in the schema (V-6)</td><td>[Data-Ownership]</td><td>Do it before real assets pile up; makes the planned M6 host-split possible at all.</td></tr>
+<tr><td>3</td><td>Fix Meshy text-task polling + pending-task counting (V-2, V-3)</td><td>—</td><td>Two small correctness bugs that will each burn a confused hour the first time they're hit in production.</td></tr>
+<tr><td>4</td><td><code>MeshProvider</code> protocol around Meshy (V-5)</td><td>[Local-First]</td><td>One cheap interface now means a local 3D generator later is a plug-in, not a rewrite.</td></tr>
+<tr><td>5</td><td>UTC-normalize timestamps (V-4)</td><td>—</td><td>Boring consistency that pays off the first time logs from two machines are compared.</td></tr>
+<tr><td>6</td><td>Phase-2 LLM features go through a gateway with local-first routing (mirror ATLAS <code>llm_gateway.py</code>)</td><td>[Local-First]</td><td>Keeps the pipeline able to run fully offline on future M6-class hardware.</td></tr>
+</table>
+
+<h2>Change List</h2>
+<ul>
+<li>No source code changes were made. No dead code, unused imports, or commented-out blocks found (Phase-2 stubs are deliberate, documented scaffolding). All concrete issues touch config defaults, schema, external API calls, or behavior — flag-only categories.</li>
+<li>Rewrote <code>docs/audit/</code> deliverables (this report, Overview, Operating Guide + HTML twins), replacing the shallow drafts.</li>
+</ul>
+
+<h2>Verification Notes</h2>
+<ul>
+<li>Tests: <code>python -m pytest</code> → <strong>25/25 pass, 1.29s</strong> (audit sandbox).</li>
+<li>Repo: 9 commits, remote <code>github.com/andrewlrose/volta-pipeline.git</code>; caches/egg-info confirmed untracked.</li>
+<li>Secrets: <code>.env.example</code> placeholders only; no secret values found anywhere in the tree.</li>
+<li>V-2/V-3 confirmed by direct code read of <code>meshy/client.py</code> and <code>bridge/sync.py</code>.</li>
+</ul>
+</main></body></html>

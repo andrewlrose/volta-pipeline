@@ -1,0 +1,57 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Volta — Operating Guide</title><style>
+body{margin:0;background:#f6f8fb;color:#172033;font:16px/1.55 "Segoe UI",system-ui,sans-serif}main{max-width:1120px;margin:0 auto;padding:42px 28px 64px}h1{color:#0b3b63;font-size:2rem;line-height:1.15}h2{color:#174d75;border-bottom:1px solid #d9e3ee;padding-bottom:.25rem;margin-top:2rem}table{border-collapse:collapse;width:100%;background:white;margin:1rem 0;box-shadow:0 1px 2px #0f172a14}th,td{border:1px solid #d8e1eb;padding:.55rem .65rem;text-align:left;vertical-align:top}th{background:#eaf2f9}tr:nth-child(even) td{background:#fbfdff}code{background:#eaf0f6;border:1px solid #d7e1eb;border-radius:4px;padding:.05rem .28rem}pre{background:#0f1720;color:#d7e6f5;padding:.9rem 1.1rem;border-radius:8px;overflow:auto;font-size:.85rem}.meta{color:#61708a;font-style:italic}.callout{background:#eef7f6;border-left:4px solid #00a99d;padding:.7rem 1rem;border-radius:0 6px 6px 0;margin:1rem 0}
+</style></head><body><main>
+<h1>Volta — Operating Guide</h1>
+<p class="meta">Fable creative/business portfolio audit — deep pass, 2026-07-07. CLI/script-driven tool.</p>
+
+<h2>Setup (once per machine)</h2>
+<pre>cd E:\dev\projects\Volta
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+copy .env.example .env    # then fill in MESHY_API_KEY</pre>
+<p class="callout"><em>Plain language: Volta installs like any Python tool. The only account/key it needs today is Meshy (the cloud 3D-model service); everything else runs on this machine. The key lives in <code>.env</code>, which is never committed.</em></p>
+<p>External tools by stage: <strong>ComfyUI</strong> running locally at <code>http://localhost:8188</code> for concept art (start it before <code>volta generate</code>); <strong>FFmpeg</strong> on PATH for social export; AccuRig/Cascadeur/MotionBuilder/UE5 remain manual (Phase 2 will script them — until then the CLI tells you the manual steps).</p>
+
+<h2>Commands</h2>
+<table>
+<tr><th>Command</th><th>Stage</th><th>What it does</th></tr>
+<tr><td><code>volta status</code></td><td>—</td><td>Catalog statistics: asset counts by type, stage runs, QA fails/warns. Your dashboard.</td></tr>
+<tr><td><code>volta generate &lt;workflow.json&gt;</code></td><td>0–1 Concept</td><td>Queues a ComfyUI workflow (e.g. <code>workflows/bsm_concept_v0.json</code>), polls to completion, reports output images.</td></tr>
+<tr><td><code>volta mesh &lt;image&gt;</code></td><td>2 Mesh</td><td>Submits image→3D to Meshy at the tier you choose (<code>--tier hero/mid/prop/env</code> sets topology quality), waits, reports result URLs.</td></tr>
+<tr><td><code>volta rig &lt;fbx&gt;</code></td><td>5 Rig</td><td>Phase 2 stub — prints the manual AccuRig→MotionBuilder HIK workflow.</td></tr>
+<tr><td><code>volta mocap &lt;file&gt;</code></td><td>7 Mocap</td><td>Validates and parses BVH/FBX/C3D; extracts frame count, fps, duration.</td></tr>
+<tr><td><code>volta mocap-scan &lt;dir&gt;</code></td><td>7 Mocap</td><td>Batch-ingests a directory of mocap files into the catalog.</td></tr>
+<tr><td><code>volta qa &lt;asset_uid&gt;</code></td><td>10 QA</td><td>Runs the validator suite (file exists, size sanity, poly budget by tier, stage record) and stores results.</td></tr>
+<tr><td><code>volta export &lt;video&gt; --preset youtube_1080</code></td><td>11 Export</td><td>FFmpeg transcode with presets: <code>youtube_4k</code>, <code>youtube_1080</code>, <code>instagram_reel</code>, <code>tiktok</code>.</td></tr>
+<tr><td><code>volta run &lt;asset_uid&gt;</code></td><td>—</td><td>Advances an asset through its next stage.</td></tr>
+<tr><td><code>volta bridge sync</code></td><td>—</td><td>Recomputes pipeline health and writes <code>.atlas-bridge/memory.json</code> for ATLAS (atomic write).</td></tr>
+<tr><td><code>volta bridge status</code> / <code>volta bridge tasks</code></td><td>—</td><td>Shows bridge state / lists TaskRequests filed by ATLAS.</td></tr>
+</table>
+
+<h2>What "working correctly" looks like</h2>
+<ul>
+<li><code>python -m pytest</code> → <strong>25 passed</strong> (~1–2s).</li>
+<li><code>volta status</code> prints a table without errors (an empty catalog shows zeros — that's fine).</li>
+<li><code>volta generate</code> requires ComfyUI at <code>:8188</code>; <code>volta mesh</code> requires <code>MESHY_API_KEY</code>; <code>volta export</code> requires <code>ffmpeg</code> on PATH. Each fails with a clear message naming exactly what's missing.</li>
+<li><code>volta bridge sync</code> bumps <code>session_count</code> and refreshes <code>last_updated</code> in <code>.atlas-bridge/memory.json</code>.</li>
+</ul>
+
+<h2>Troubleshooting</h2>
+<table>
+<tr><th>Symptom</th><th>Likely cause / fix</th></tr>
+<tr><td><code>ComfyUI not running</code> / ping fails</td><td>Start ComfyUI locally first; confirm <code>COMFYUI_HOST</code> in <code>.env</code> if not on <code>:8188</code>.</td></tr>
+<tr><td><code>MESHY_API_KEY not set</code></td><td>Fill it in <code>.env</code> (from app.meshy.ai → Settings).</td></tr>
+<tr><td>Text→3D job "times out" or 404s while polling</td><td>Known bug V-2 (client polls the image endpoint for text tasks) — check the job in the Meshy web app; it likely succeeded.</td></tr>
+<tr><td>"N pending TaskRequest(s)" alert won't clear</td><td>Known bug V-3 — the counter ignores task status. Verify with <code>volta bridge tasks</code>; trust the task list, not the alert count.</td></tr>
+<tr><td><code>NotImplementedError: ... is Phase 2</code></td><td>Working as designed — the message includes the manual workflow to use instead.</td></tr>
+<tr><td>Catalog seems empty on another machine</td><td>The catalog currently defaults to <code>~/.volta/catalog.db</code> (finding V-1). Set <code>VOLTA_DB</code> explicitly per project until the per-project default lands.</td></tr>
+</table>
+
+<h2>Manual vs. automated</h2>
+<ul>
+<li><strong>Automated today:</strong> concept generation, mesh submission, mocap parsing, QA checks, social transcode, bridge reporting.</li>
+<li><strong>Manual today (Phase 2 scope):</strong> rigging (AccuRig), mocap physics cleanup (Cascadeur), facial capture, UE5 assembly/PCG, film/game packaging — the CLI prints step-by-step manual instructions for each.</li>
+<li><strong>Human-only by rule:</strong> HERO-tier asset promotions (Andy approves), external generation spend (Meshy costs money per job — check the queue before batch runs).</li>
+</ul>
+</main></body></html>

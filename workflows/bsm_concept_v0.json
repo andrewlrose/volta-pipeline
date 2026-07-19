@@ -2,7 +2,7 @@
   "_meta": {
     "title": "BSM Concept Art — Flux.1 v0",
     "description": "Bear Suit Man Ep1 concept generation. Locked for style-bible pass.",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "locked": false,
     "hardware": "RTX 3070 Laptop (8GB VRAM)",
     "model": "flux1-schnell GGUF Q8_0 — fits 8GB; faster iteration than dev",
@@ -21,7 +21,7 @@
       "6. Launch: .\\run_nvidia_gpu.bat --lowvram",
       "7. Test: volta generate workflows/bsm_concept_v0.json"
     ],
-    "notes": "Replace positive_prompt text after style-bible.md is approved."
+    "notes": "Replace positive_prompt text after style-bible.md is approved. v0.1.1: fixed node ID keys (1b->11, 1c->12) so references resolve correctly."
   },
   "1": {
     "id": 1,
@@ -29,9 +29,9 @@
     "inputs": {
       "unet_name": "flux1-schnell-Q8_0.gguf"
     },
-    "_comment": "Requires ComfyUI-GGUF custom node. Use Q5_K_S variant to save ~4GB load time."
+    "_comment": "Requires ComfyUI-GGUF custom node: git clone https://github.com/city96/ComfyUI-GGUF into ComfyUI/custom_nodes/"
   },
-  "1b": {
+  "11": {
     "id": 11,
     "class_type": "DualCLIPLoader",
     "inputs": {
@@ -40,7 +40,7 @@
       "type": "flux"
     }
   },
-  "1c": {
+  "12": {
     "id": 12,
     "class_type": "VAELoader",
     "inputs": {
@@ -54,7 +54,7 @@
       "text": "bear proof suit man, supermarket cereal aisle, deadpan wide shot, fluorescent lighting, static locked-off camera, Roy Andersson color palette, pale desaturated tones, linoleum floor, institutional shelving",
       "clip": ["11", 0]
     },
-    "_comment": "REPLACE text after style-bible.md is locked. Keep aspect language: 'deadpan wide shot', 'locked-off camera'."
+    "_comment": "REPLACE text with shot prompt from flux-prompts.md. Keep aspect language: 'deadpan wide shot', 'locked-off camera'."
   },
   "3": {
     "id": 3,
@@ -90,7 +90,7 @@
       "scheduler": "simple",
       "denoise": 1.0
     },
-    "_comment": "schnell REQUIRES cfg=1.0 and scheduler=simple. Steps 4 = full quality for schnell. Do NOT raise cfg — will degrade output."
+    "_comment": "schnell REQUIRES cfg=1.0 and scheduler=simple. Steps 4 = full quality for schnell. Do NOT raise cfg."
   },
   "6": {
     "id": 6,
@@ -107,6 +107,6 @@
       "images": ["6", 0],
       "filename_prefix": "bsm_concept"
     },
-    "_comment": "Outputs to ComfyUI output/ dir. Move finals to Bear_Suit_Man/bsm-ep1/concept/."
+    "_comment": "Outputs to ComfyUI output/ dir. Move finals to Bear_Suit_Man/bsm-ep1/concept-stills/."
   }
 }

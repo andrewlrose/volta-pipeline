@@ -1,0 +1,26 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Volta — Overview &amp; Recommendations</title><style>
+body{margin:0;background:#f6f8fb;color:#172033;font:16px/1.55 "Segoe UI",system-ui,sans-serif}main{max-width:1120px;margin:0 auto;padding:42px 28px 64px}h1{color:#0b3b63;font-size:2rem;line-height:1.15}h2{color:#174d75;border-bottom:1px solid #d9e3ee;padding-bottom:.25rem;margin-top:2rem}code{background:#eaf0f6;border:1px solid #d7e1eb;border-radius:4px;padding:.05rem .28rem}.meta{color:#61708a;font-style:italic}
+</style></head><body><main>
+<h1>Volta — Project Overview &amp; Recommendations Summary</h1>
+<p class="meta">Fable creative/business portfolio audit — deep pass, 2026-07-07.</p>
+
+<h2>What this project is (plain language)</h2>
+<p>Volta is Andy's <strong>AI-assisted movie/game production pipeline in a box</strong>. It takes the workflow he's run at industrial scale for 25 years — concept art → 3D model → rig → motion capture → assembly in Unreal → quality check → final delivery — and rebuilds it as a one-person command-line tool where AI services do the heavy lifting at several stages: ComfyUI generates concept art on the local GPU, Meshy turns images into 3D meshes, and quality gates check every asset against film/game budgets before it moves on.</p>
+<p>Every asset, every processing step, and every QA result is recorded in a small local database, so the pipeline always knows what state everything is in. The live proving ground is Bear Suit Man Episode 1; CuddlePirates is the second demo production.</p>
+
+<h2>What it's trying to achieve</h2>
+<p>A credible boutique-studio pipeline that one experienced supervisor plus AI tools can operate — proving that the concept-to-delivery path that used to take a department can run on a desk. Phase 1 (working now): concept generation, image-to-mesh, mocap ingest, QA gates, social-media export, ATLAS status reporting. Phase 2 (deliberately stubbed, not faked): auto-rigging, facial animation, Unreal automation, film/game packaging.</p>
+
+<h2>How well it's achieving that</h2>
+<p>The engineering is disciplined and honest. What's claimed as working, works — 25/25 tests pass, verified live in this audit. What isn't built yet says so explicitly and tells you the manual workaround instead of pretending. Repo hygiene is solid (git history, GitHub remote, secrets kept to <code>.env</code>, atomic file writes in the ATLAS bridge — the best writer discipline in the creative portfolio).</p>
+<p>Three real issues need attention, all cheap now and expensive later: the asset catalog still defaults to a shared home-directory location despite the project's own decision that each production owns its catalog (V-1); the Meshy client checks text-to-3D jobs at the wrong endpoint, so those jobs appear to fail (V-2); and asset file paths are stored as absolute Windows paths, which will all break in the planned move to the M6 server (V-6).</p>
+
+<h2>Recommendations summary (plain language)</h2>
+<ol>
+<li><strong>Move the catalog default to per-project <code>.volta/</code></strong> with one shared path resolver — the household has already paid the price for "one variable, two meanings" drift once. (V-1 — Medium.)</li>
+<li><strong>Store portable asset references</strong> (named mount + relative path + hash) before the catalog fills up with real assets. (V-6 — Medium.)</li>
+<li><strong>Fix the two small correctness bugs</strong> — text-to-3D polling and the never-clearing "pending tasks" alert. (V-2/V-3 — Medium.)</li>
+<li><strong>Wrap Meshy in a provider interface</strong> so a future local 3D generator is a drop-in, keeping the pipeline on the local-first road. (V-5 — [Local-First].)</li>
+</ol>
+<p>Full detail: <code>Volta_Audit_Report.md</code> in this folder.</p>
+</main></body></html>
