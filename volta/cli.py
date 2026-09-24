@@ -839,3 +839,96 @@ def bridge_exec(done: Optional[str], watch: bool) -> None:
                 _process_once()
         except KeyboardInterrupt:
             console.print("\n[dim]Stopped.[/dim]")
+
+
+# ── ue (Unreal Engine integration) ──────────────────────────────────────────
+
+@cli.group()
+def ue() -> None:
+    """Unreal Engine integration — remote control, Fab library, and MCP bridge."""
+
+
+@ue.command(name="status")
+@click.option("--timeout", default=2.0, help="Discovery timeout in seconds.")
+def ue_status(timeout: float) -> None:
+    """Check connection to running Unreal Engine editor instance."""
+    from volta.unreal.client import UnrealRemoteClient
+
+    client = UnrealRemoteClient()
+    console.print("[dim]Pinging Unreal Engine nodes (UDP 239.0.0.1:6766)...[/dim]")
+    connected = client.connect(timeout_sec=timeout)
+    if connected:
+        console.print("[green]Connected to Unreal Engine Editor![/green]")
+        res = client.run_python('import unreal; print("Active project:", unreal.Paths.project_dir())')
+        output = res.get("output", [])
+        for line in output:
+            console.print(f"  [cyan]{line.get('output', '')}[/cyan]")
+        client.disconnect()
+    else:
+        console.print("[yellow]No active Unreal Engine editor detected with Remote Execution enabled.[/yellow]")
+        console.print("  [dim]Tip: In UE, ensure 'Python Editor Script Plugin' and 'Enable Remote Execution' are enabled.[/dim]")
+
+
+@ue.command(name="fab-list")
+@click.option(
+    "--cache",
+    type=click.Path(),
+    default=r"E:\data\Unreal_Fab_Library\VaultCache\FabLibrary",
+    show_default=True,
+    help="Fab cache directory.",
+)
+def ue_fab_list(cache: str) -> None:
+    """List all downloaded Fab and Megascans library assets."""
+    from volta.unreal.fab import FabLibrary
+
+    fab = FabLibrary(Path(cache))
+    items = fab.scan()
+    if not items:
+        console.print(f"[yellow]No assets found in {cache}[/yellow]")
+        return
+
+    t = Table(title=f"Fab Library ({len(items)} assets)", show_header=True)
+    t.add_column("Asset Name", style="bold cyan")
+    t.add_column("Formats", style="green")
+    t.add_column("Meshes", justify="right")
+    t.add_column("Textures", justify="right")
+
+    for item in items:
+        mesh_summary = f"{len(item['meshes'])} file(s)"
+        if item["meshes"]:
+            mesh_summary += f" ({sum(m['size_mb'] for m in item['meshes']):.1f} MB)"
+        tex_summary = f"{len(item['textures'])} map(s)"
+        t.add_row(
+            item["title"],
+            ", ".join(item["formats"]),
+            mesh_summary,
+            tex_summary,
+        )
+
+    console.print(t)
+
+
+@ue.command(name="export-fab")
+@click.argument("asset_query")
+@click.argument("dest_dir", type=click.Path())
+@click.option(
+    "--cache",
+    type=click.Path(),
+    default=r"E:\data\Unreal_Fab_Library\VaultCache\FabLibrary",
+    show_default=True,
+    help="Fab cache directory.",
+)
+def ue_export_fab(asset_query: str, dest_dir: str, cache: str) -> None:
+    """Export a downloaded Fab asset (mesh + 4K PBR textures) into a project folder."""
+    from volta.unreal.fab import FabLibrary
+
+    fab = FabLibrary(Path(cache))
+    try:
+        res = fab.export_to_project(asset_query, Path(dest_dir))
+        console.print(f"[green]Successfully exported '{res['title']}' to {dest_dir}:[/green]")
+        for m in res["meshes"]:
+            console.print(f"  [cyan]Mesh:[/cyan] {Path(m).name}")
+        for t in res["textures"]:
+            console.print(f"  [dim]Texture:[/dim] {Path(t).name}")
+    except Exception as e:
+        console.print(f"[red]Error exporting asset:[/red] {e}")

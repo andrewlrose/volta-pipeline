@@ -1,1 +1,5 @@
-"""VOLTA — Unreal Engine 5 Python scripts (Stage 9: Blueprints)."""
+"""VOLTA — Unreal Engine 5 Python automation & Remote Execution."""
+
+from volta.unreal.client import UnrealRemoteClient
+
+__all__ = ["UnrealRemoteClient"]
