@@ -6,6 +6,7 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Generator, Optional
@@ -14,12 +15,18 @@ from volta.models import (
     Asset,
     AssetTier,
     AssetType,
+    CharacterAsset,
+    EnvironmentAsset,
+    FacialAnimAsset,
+    MotionAsset,
     PipelineStage,
+    PropAsset,
     QAResult,
     QAStatus,
+    ShotAsset,
+    SkeletonStandard,
     StageRun,
 )
-
 
 _CREATE_SQL = """
 PRAGMA journal_mode = WAL;
@@ -87,6 +94,16 @@ class CatalogDB:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self.session() as conn:
             conn.executescript(_CREATE_SQL)
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(assets)")}
+            for name, definition in {
+                "poly_count": "INTEGER",
+                "approval_status": "TEXT NOT NULL DEFAULT 'pending'",
+                "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+            }.items():
+                if name not in columns:
+                    conn.execute(
+                        f"ALTER TABLE assets ADD COLUMN {name} {definition}"
+                    )
 
     @contextmanager
     def session(
@@ -98,6 +115,7 @@ class CatalogDB:
             detect_types=sqlite3.PARSE_DECLTYPES,
         )
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn
             conn.commit()
@@ -109,9 +127,7 @@ class CatalogDB:
 
     # ── Assets ────────────────────────────────────────────────────────────────
 
-    def upsert_asset(
-        self, conn: sqlite3.Connection, asset: Asset
-    ) -> None:
+    def upsert_asset(self, conn: sqlite3.Connection, asset: Asset) -> None:
         """Insert or replace an asset record."""
         now = datetime.utcnow().isoformat()
         conn.execute(
@@ -119,10 +135,14 @@ class CatalogDB:
             INSERT INTO assets
                 (uid, name, asset_type, stage, file_path,
                  file_hash, file_size, tier, tags, notes,
-                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, updated_at, poly_count, approval_status, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(uid) DO UPDATE SET
                 name       = excluded.name,
+                asset_type = excluded.asset_type,
+                poly_count = excluded.poly_count,
+                approval_status = excluded.approval_status,
+                metadata_json = excluded.metadata_json,
                 stage      = excluded.stage,
                 file_path  = excluded.file_path,
                 file_hash  = excluded.file_hash,
@@ -143,17 +163,22 @@ class CatalogDB:
                 asset.tier.value,
                 json.dumps(asset.tags),
                 asset.notes,
-                (
-                    asset.created_at.isoformat()
-                    if asset.created_at else now
-                ),
+                (asset.created_at.isoformat() if asset.created_at else now),
                 now,
+                getattr(asset, "poly_count", None),
+                asset.approval_status,
+                json.dumps(
+                    {
+                        k: v
+                        for k, v in asdict(asset).items()
+                        if k not in {f.name for f in fields(Asset)}
+                    },
+                    default=str,
+                ),
             ),
         )
 
-    def get_asset(
-        self, conn: sqlite3.Connection, uid: str
-    ) -> Optional[Asset]:
+    def get_asset(self, conn: sqlite3.Connection, uid: str) -> Optional[Asset]:
         """Retrieve an asset by UID."""
         row = conn.execute(
             "SELECT * FROM assets WHERE uid = ?", (uid,)
@@ -178,9 +203,7 @@ class CatalogDB:
         ).fetchall()
         return [self._row_to_asset(r) for r in rows]
 
-    def get_all_assets(
-        self, conn: sqlite3.Connection
-    ) -> list[Asset]:
+    def get_all_assets(self, conn: sqlite3.Connection) -> list[Asset]:
         """Retrieve all assets ordered by last update."""
         rows = conn.execute(
             "SELECT * FROM assets ORDER BY updated_at DESC"
@@ -188,7 +211,31 @@ class CatalogDB:
         return [self._row_to_asset(r) for r in rows]
 
     def _row_to_asset(self, row: sqlite3.Row) -> Asset:
-        return Asset(
+        asset_type = AssetType(row["asset_type"])
+        cls = {
+            AssetType.CHARACTER: CharacterAsset,
+            AssetType.PROP: PropAsset,
+            AssetType.ENVIRONMENT: EnvironmentAsset,
+            AssetType.MOTION: MotionAsset,
+            AssetType.FACIAL_ANIM: FacialAnimAsset,
+            AssetType.SHOT: ShotAsset,
+        }.get(asset_type, Asset)
+        metadata = json.loads(row["metadata_json"] or "{}")
+        if not isinstance(metadata, dict):
+            raise ValueError("Asset metadata_json must be an object")
+        allowed = {f.name for f in fields(cls)} - {
+            f.name for f in fields(Asset)
+        }
+        extra = {k: v for k, v in metadata.items() if k in allowed}
+        if "poly_count" in allowed:
+            extra["poly_count"] = row["poly_count"]
+        if "skeleton_standard" in extra:
+            extra["skeleton_standard"] = SkeletonStandard(
+                extra["skeleton_standard"]
+            )
+        return cls(
+            **extra,
+            approval_status=row["approval_status"],
             uid=row["uid"],
             name=row["name"],
             asset_type=AssetType(row["asset_type"]),
@@ -201,11 +248,13 @@ class CatalogDB:
             notes=row["notes"],
             created_at=(
                 datetime.fromisoformat(row["created_at"])
-                if row["created_at"] else None
+                if row["created_at"]
+                else None
             ),
             updated_at=(
                 datetime.fromisoformat(row["updated_at"])
-                if row["updated_at"] else None
+                if row["updated_at"]
+                else None
             ),
         )
 
@@ -293,7 +342,8 @@ class CatalogDB:
             started_at=datetime.fromisoformat(row["started_at"]),
             finished_at=(
                 datetime.fromisoformat(row["finished_at"])
-                if row["finished_at"] else None
+                if row["finished_at"]
+                else None
             ),
             status=row["status"],
             tool=row["tool"],
@@ -357,7 +407,8 @@ class CatalogDB:
             detail=row["detail"],
             checked_at=(
                 datetime.fromisoformat(row["checked_at"])
-                if row["checked_at"] else None
+                if row["checked_at"]
+                else None
             ),
         )
 

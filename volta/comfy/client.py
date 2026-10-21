@@ -28,10 +28,9 @@ import httpx
 
 from volta.models import ComfyError
 
-
 DEFAULT_HOST = "http://localhost:8188"
 POLL_INTERVAL_S = 2.0
-MAX_WAIT_S = 600.0    # 10 minutes
+MAX_WAIT_S = 600.0  # 10 minutes
 
 
 class ComfyClient:
@@ -39,9 +38,7 @@ class ComfyClient:
 
     def __init__(self, host: str = DEFAULT_HOST) -> None:
         self.host = host.rstrip("/")
-        self._client = httpx.Client(
-            base_url=self.host, timeout=30.0
-        )
+        self._client = httpx.Client(base_url=self.host, timeout=30.0)
 
     def ping(self) -> bool:
         """Return True if ComfyUI is reachable."""
@@ -54,9 +51,7 @@ class ComfyClient:
     def load_workflow(self, path: Path) -> dict[str, Any]:
         """Load a workflow JSON file from disk."""
         if not path.exists():
-            raise FileNotFoundError(
-                f"Workflow not found: {path}"
-            )
+            raise FileNotFoundError(f"Workflow not found: {path}")
         with path.open() as f:
             return json.load(f)
 
@@ -74,9 +69,7 @@ class ComfyClient:
             resp = self._client.post("/prompt", json=payload)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise ComfyError(
-                f"Failed to queue prompt: {exc}"
-            ) from exc
+            raise ComfyError(f"Failed to queue prompt: {exc}") from exc
         return resp.json()["prompt_id"]
 
     def wait_for_prompt(
@@ -92,13 +85,9 @@ class ComfyClient:
                 return history[prompt_id]
             time.sleep(POLL_INTERVAL_S)
             elapsed += POLL_INTERVAL_S
-        raise ComfyError(
-            f"Prompt {prompt_id} timed out after {max_wait_s}s"
-        )
+        raise ComfyError(f"Prompt {prompt_id} timed out after {max_wait_s}s")
 
-    def get_output_paths(
-        self, history_entry: dict[str, Any]
-    ) -> list[str]:
+    def get_output_paths(self, history_entry: dict[str, Any]) -> list[str]:
         """Extract output file names from a history entry."""
         paths: list[str] = []
         outputs = history_entry.get("outputs", {})
@@ -109,19 +98,39 @@ class ComfyClient:
                         paths.append(item["filename"])
         return paths
 
-    def _get_history(
-        self, prompt_id: str
-    ) -> dict[str, Any]:
+    def download_outputs(
+        self, history_entry: dict[str, Any], out_dir: Path
+    ) -> list[Path]:
+        """Download actual server outputs; never catalog unverified filenames."""
+        out_dir.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for node, output in history_entry.get("outputs", {}).items():
+            for key in ("images", "videos", "gifs"):
+                for index, item in enumerate(output.get(key, [])):
+                    filename = item.get("filename")
+                    if not filename:
+                        continue
+                    target = out_dir / f"{node}_{index}_{Path(filename).name}"
+                    response = self._client.get(
+                        "/view",
+                        params={
+                            "filename": filename,
+                            "subfolder": item.get("subfolder", ""),
+                            "type": item.get("type", "output"),
+                        },
+                    )
+                    response.raise_for_status()
+                    target.write_bytes(response.content)
+                    paths.append(target)
+        return paths
+
+    def _get_history(self, prompt_id: str) -> dict[str, Any]:
         try:
-            resp = self._client.get(
-                f"/history/{prompt_id}"
-            )
+            resp = self._client.get(f"/history/{prompt_id}")
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as exc:
-            raise ComfyError(
-                f"Failed to get history: {exc}"
-            ) from exc
+            raise ComfyError(f"Failed to get history: {exc}") from exc
 
     def close(self) -> None:
         """Close the underlying HTTP client."""

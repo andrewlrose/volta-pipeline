@@ -9,12 +9,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-
 # ── Enumerations ──────────────────────────────────────────────────────────────
+
 
 class PipelineStage(str, Enum):
     """Ordered pipeline stages."""
 
+    KEYFRAME = "keyframe"
+    VIDEO = "video"
     CONCEPT = "concept"
     CONSISTENCY = "consistency"
     MESH = "mesh"
@@ -37,28 +39,29 @@ class AssetType(str, Enum):
     FACIAL_ANIM = "facial_anim"
     MATERIAL = "material"
     BLUEPRINT = "blueprint"
+    SHOT = "shot"
 
 
 class AssetTier(str, Enum):
-    HERO = "hero"          # 10k–80k tris, full retopo + bake
-    MID = "mid"            # 2k–10k tris, auto retopo
-    PROP = "prop"          # <2k tris, raw AI output OK
-    ENVIRONMENT = "env"    # Terrain/architecture, Nanite
+    HERO = "hero"  # 10k–80k tris, full retopo + bake
+    MID = "mid"  # 2k–10k tris, auto retopo
+    PROP = "prop"  # <2k tris, raw AI output OK
+    ENVIRONMENT = "env"  # Terrain/architecture, Nanite
 
 
 class SkeletonStandard(str, Enum):
-    HIK = "hik"                  # MotionBuilder HIK (canonical)
+    HIK = "hik"  # MotionBuilder HIK (canonical)
     UE_MANNEQUIN = "ue_mannequin"
     METAHUMAN = "metahuman"
     CUSTOM = "custom"
 
 
 class ExportTarget(str, Enum):
-    FILM = "film"        # EXR/ProRes via Movie Render Queue
-    GAME = "game"        # UE5 packaged build
-    SOCIAL = "social"    # H.264/H.265 via FFmpeg
-    WEB = "web"          # Pixel Streaming / WebGL
-    VR = "vr"            # Quest / SteamVR
+    FILM = "film"  # EXR/ProRes via Movie Render Queue
+    GAME = "game"  # UE5 packaged build
+    SOCIAL = "social"  # H.264/H.265 via FFmpeg
+    WEB = "web"  # Pixel Streaming / WebGL
+    VR = "vr"  # Quest / SteamVR
 
 
 class QAStatus(str, Enum):
@@ -69,6 +72,7 @@ class QAStatus(str, Enum):
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
+
 
 class VoltaError(Exception):
     """Base exception for all VOLTA errors."""
@@ -103,9 +107,7 @@ class ExportError(VoltaError):
 
     def __init__(self, target: ExportTarget, reason: str) -> None:
         self.target = target
-        super().__init__(
-            f"Export to {target.value} failed: {reason}"
-        )
+        super().__init__(f"Export to {target.value} failed: {reason}")
 
 
 class ComfyError(VoltaError):
@@ -117,6 +119,7 @@ class MeshyError(VoltaError):
 
 
 # ── Core asset dataclasses ────────────────────────────────────────────────────
+
 
 @dataclass
 class Asset:
@@ -132,6 +135,7 @@ class Asset:
     tier: AssetTier = AssetTier.MID
     tags: list[str] = field(default_factory=list)
     notes: str = ""
+    approval_status: str = "pending"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -155,6 +159,17 @@ class CharacterAsset(Asset):
 
 
 @dataclass
+class PropAsset(Asset):
+    poly_count: Optional[int] = None
+
+
+@dataclass
+class ShotAsset(Asset):
+    keyframe_path: str = ""
+    video_path: str = ""
+
+
+@dataclass
 class EnvironmentAsset(Asset):
     """An environment or level asset."""
 
@@ -167,7 +182,7 @@ class EnvironmentAsset(Asset):
 class MotionAsset(Asset):
     """A motion capture or AI-generated animation asset."""
 
-    source: str = ""    # e.g. "vicon", "deepmotion", "cascadeur"
+    source: str = ""  # e.g. "vicon", "deepmotion", "cascadeur"
     frame_count: int = 0
     fps: float = 60.0
     duration_s: float = 0.0
@@ -179,7 +194,7 @@ class MotionAsset(Asset):
 class FacialAnimAsset(Asset):
     """An ARKit / LiveLink facial animation asset."""
 
-    source: str = ""    # e.g. "livelink", "audio2face", "d-id"
+    source: str = ""  # e.g. "livelink", "audio2face", "d-id"
     blendshape_count: int = 52
     frame_count: int = 0
     fps: float = 60.0
@@ -187,6 +202,7 @@ class FacialAnimAsset(Asset):
 
 
 # ── Pipeline run records ──────────────────────────────────────────────────────
+
 
 @dataclass
 class StageRun:
@@ -197,7 +213,7 @@ class StageRun:
     stage: PipelineStage
     started_at: datetime
     finished_at: Optional[datetime] = None
-    status: str = "running"    # running | success | failed
+    status: str = "running"  # running | success | failed
     tool: str = ""
     input_path: str = ""
     output_path: str = ""

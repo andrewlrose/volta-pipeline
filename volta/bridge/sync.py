@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from volta.catalog import CatalogDB
+from volta.config import resolve_catalog_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +47,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BRIDGE_DIR = _REPO_ROOT / ".atlas-bridge"
 _MEMORY_FILE = _BRIDGE_DIR / "memory.json"
 _TASKS_FILE = _BRIDGE_DIR / "tasks.jsonl"
-_DEFAULT_DB = Path.home() / ".volta" / "catalog.db"
+
 
 # Health thresholds
-_ACTIVE_DAYS = 7    # pushed within this many days → "active"
-_STALE_DAYS = 30    # pushed within this many days → "stale", else "inactive"
+_ACTIVE_DAYS = 7  # pushed within this many days → "active"
+_STALE_DAYS = 30  # pushed within this many days → "stale", else "inactive"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _git_days_since_push(
     project_root: Path = _REPO_ROOT,
@@ -62,8 +64,12 @@ def _git_days_since_push(
     try:
         result = subprocess.run(
             [
-                "git", "-C", str(project_root),
-                "log", "-1", "--format=%ci",
+                "git",
+                "-C",
+                str(project_root),
+                "log",
+                "-1",
+                "--format=%ci",
             ],
             capture_output=True,
             text=True,
@@ -122,13 +128,23 @@ def _pending_task_count(
             for line in f:
                 line = line.strip()
                 if line:
-                    count += 1
+                    try:
+                        task = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning("Ignoring malformed bridge task row")
+                        continue
+                    if isinstance(task, dict) and task.get("status") in (
+                        "pending",
+                        "in_progress",
+                    ):
+                        count += 1
     except OSError:
         pass
     return count
 
 
 # ── Core API ──────────────────────────────────────────────────────────────────
+
 
 def compute_memory(
     db_path: Optional[Path] = None,
@@ -139,7 +155,7 @@ def compute_memory(
     Merges live catalog metrics, git state, and any ATLAS-written
     fields (like last_atlas_sync, open_tasks) we want to preserve.
     """
-    db = db_path or _DEFAULT_DB
+    db = db_path or resolve_catalog_db_path(Path.cwd())
     bdir = bridge_dir or _BRIDGE_DIR
 
     metrics = _catalog_metrics(db)
@@ -161,32 +177,33 @@ def compute_memory(
     qa_fails = int(metrics.get("qa_fails", 0))
 
     status_summary = (
-        f"VOLTA Phase 1 — "
-        f"{total} asset(s), {stage_runs} stage run(s)"
+        f"VOLTA Phase 1 — {total} asset(s), {stage_runs} stage run(s)"
     )
 
     # Build alerts from live data, preserve any manually added ones
     alerts: list[dict] = []
     if qa_fails > 0:
-        alerts.append({
-            "id": "qa-fails",
-            "message": (
-                f"{qa_fails} QA failure(s) in catalog"
-            ),
-            "severity": "warning",
-            "resolved": False,
-        })
+        alerts.append(
+            {
+                "id": "qa-fails",
+                "message": (f"{qa_fails} QA failure(s) in catalog"),
+                "severity": "warning",
+                "resolved": False,
+            }
+        )
     pending_tasks = _pending_task_count(bdir)
     if pending_tasks > 0:
-        alerts.append({
-            "id": "atlas-tasks-pending",
-            "message": (
-                f"{pending_tasks} pending TaskRequest(s) "
-                f"from ATLAS awaiting plan"
-            ),
-            "severity": "info",
-            "resolved": False,
-        })
+        alerts.append(
+            {
+                "id": "atlas-tasks-pending",
+                "message": (
+                    f"{pending_tasks} pending TaskRequest(s) "
+                    f"from ATLAS awaiting plan"
+                ),
+                "severity": "info",
+                "resolved": False,
+            }
+        )
 
     # Preserve ATLAS-written fields and open_tasks list
     last_atlas_sync = previous.get("last_atlas_sync")
@@ -200,9 +217,7 @@ def compute_memory(
             "days_since_push": days_since_push,
             "open_pr_count": 0,
         },
-        "last_updated": datetime.now().isoformat(
-            timespec="seconds"
-        ),
+        "last_updated": datetime.now().isoformat(timespec="seconds"),
         "last_atlas_sync": last_atlas_sync,
         "session_count": prev_session + 1,
         "alerts": alerts,
@@ -268,9 +283,7 @@ def read_tasks(
             try:
                 tasks.append(json.loads(line))
             except json.JSONDecodeError as exc:
-                logger.warning(
-                    "tasks.jsonl line %d invalid JSON: %s", i, exc
-                )
+                logger.warning("tasks.jsonl line %d invalid JSON: %s", i, exc)
     return tasks
 
 
@@ -304,9 +317,7 @@ def update_task_status(
                 continue
             try:
                 task = json.loads(raw_stripped)
-                tid = task.get("id") or task.get(
-                    "task_request_id", ""
-                )
+                tid = task.get("id") or task.get("task_request_id", "")
                 if tid == task_id:
                     task["status"] = new_status
                     lines.append(json.dumps(task) + "\n")
@@ -321,15 +332,11 @@ def update_task_status(
 
     # Atomic write via tempfile in same directory
     try:
-        fd, tmp = tempfile.mkstemp(
-            dir=str(bdir), suffix=".tmp"
-        )
+        fd, tmp = tempfile.mkstemp(dir=str(bdir), suffix=".tmp")
         with open(fd, "w", encoding="utf-8") as fh:
             fh.writelines(lines)
         Path(tmp).replace(path)
     except (OSError, IOError) as exc:
-        logger.error(
-            "Failed to rewrite tasks.jsonl: %s", exc
-        )
+        logger.error("Failed to rewrite tasks.jsonl: %s", exc)
         return False
     return True

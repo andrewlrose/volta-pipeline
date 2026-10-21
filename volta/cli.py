@@ -12,12 +12,15 @@ from rich.console import Console
 from rich.table import Table
 
 from volta.catalog import CatalogDB
+from volta.config import resolve_catalog_db_path
 from volta.models import AssetType, PipelineStage
 from volta.qa.validators import qa_passed, run_qa_suite
 
-
 console = Console()
-DEFAULT_DB = Path.home() / ".volta" / "catalog.db"
+
+
+def _default_db() -> str:
+    return str(resolve_catalog_db_path(Path.cwd()))
 
 
 @click.group()
@@ -28,11 +31,12 @@ def cli() -> None:
 
 # ── status ────────────────────────────────────────────────────────────────────
 
+
 @cli.command()
 @click.option(
     "--db",
     type=click.Path(),
-    default=str(DEFAULT_DB),
+    default=_default_db,
     show_default=True,
     help="Catalog database path.",
 )
@@ -53,25 +57,20 @@ def status(db: str) -> None:
     t.add_row("Stage runs", str(s["stage_runs"]))
     t.add_row(
         "QA fails",
-        f"[red]{s['qa_fails']}[/red]"
-        if s["qa_fails"]
-        else "0",
+        f"[red]{s['qa_fails']}[/red]" if s["qa_fails"] else "0",
     )
     t.add_row(
         "QA warns",
-        f"[yellow]{s['qa_warns']}[/yellow]"
-        if s["qa_warns"]
-        else "0",
+        f"[yellow]{s['qa_warns']}[/yellow]" if s["qa_warns"] else "0",
     )
     console.print(t)
 
 
 # ── generate ──────────────────────────────────────────────────────────────────
 
+
 @cli.command()
-@click.argument(
-    "workflow", type=click.Path(exists=True, path_type=Path)
-)
+@click.argument("workflow", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--host",
     default="http://localhost:8188",
@@ -85,9 +84,7 @@ def status(db: str) -> None:
     show_default=True,
     help="Output directory for generated images.",
 )
-@click.option(
-    "--db", type=click.Path(), default=str(DEFAULT_DB)
-)
+@click.option("--db", type=click.Path(), default=_default_db)
 def generate(
     workflow: Path,
     host: str,
@@ -96,46 +93,27 @@ def generate(
 ) -> None:
     """Run a ComfyUI generation workflow (Stage 0 — Concept)."""
     from volta.comfy.client import ComfyClient
+    from volta.pipeline import catalogued_stage
 
-    with ComfyClient(host=host) as client:
-        if not client.ping():
-            console.print(
-                f"[red]ERROR[/red] ComfyUI not reachable "
-                f"at {host}"
+    with catalogued_stage(
+        Path(db), workflow, PipelineStage.CONCEPT, "comfy"
+    ) as outputs:
+        with ComfyClient(host=host) as client:
+            if not client.ping():
+                raise click.ClickException(f"ComfyUI not reachable at {host}")
+            history = client.wait_for_prompt(
+                client.queue_prompt(client.load_workflow(workflow))
             )
-            console.print(
-                "  Start ComfyUI: python main.py --port 8188"
-            )
-            sys.exit(1)
-        console.print(
-            f"[cyan]Loading workflow:[/cyan] {workflow}"
-        )
-        wf = client.load_workflow(workflow)
-        console.print("[cyan]Queuing prompt...[/cyan]")
-        prompt_id = client.queue_prompt(wf)
-        console.print(
-            f"[cyan]Waiting for[/cyan] {prompt_id[:8]}..."
-        )
-        history = client.wait_for_prompt(prompt_id)
-        paths = client.get_output_paths(history)
-    if paths:
-        console.print(
-            f"[green]Done.[/green] {len(paths)} output(s):"
-        )
-        for p in paths:
-            console.print(f"  {p}")
-    else:
-        console.print(
-            "[yellow]Workflow complete — no outputs found."
-            "[/yellow]"
-        )
+            outputs.extend(client.download_outputs(history, out_dir))
+    console.print(f"Registered {len(outputs)} generated output(s).")
 
 
 # ── mesh ──────────────────────────────────────────────────────────────────────
 
+
 @cli.command()
 @click.argument(
-    "image", type=click.Path(exists=True, path_type=Path)
+    "image", type=click.Path(exists=True, path_type=Path), required=False
 )
 @click.option(
     "--tier",
@@ -160,9 +138,7 @@ def generate(
     type=click.Path(path_type=Path),
     default=Path("."),
 )
-@click.option(
-    "--db", type=click.Path(), default=str(DEFAULT_DB)
-)
+@click.option("--db", type=click.Path(), default=_default_db)
 def mesh(
     image: Path,
     tier: str,
@@ -172,63 +148,62 @@ def mesh(
     db: str,
 ) -> None:
     """Convert an image or prompt to 3D mesh via Meshy (Stage 2)."""
+    import httpx
+
     from volta.meshy.client import MeshyClient
     from volta.models import AssetTier
+    from volta.pipeline import catalogued_stage
 
-    tier_enum = AssetTier(tier)
-    with MeshyClient() as client:
-        if mode == "image":
-            console.print(
-                f"[cyan]Submitting image-to-3D:[/cyan] {image}"
+    if mode == "text" and not prompt:
+        raise click.UsageError("--prompt is required for text mode")
+    if mode == "image" and image is None:
+        raise click.UsageError("An image is required for image mode")
+    source = image
+    if source is None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        source = out_dir / "mesh_prompt.txt"
+        source.write_text(prompt, encoding="utf-8")
+    with catalogued_stage(
+        Path(db), source, PipelineStage.MESH, "meshy"
+    ) as outputs:
+        with MeshyClient() as client:
+            task_id = (
+                client.image_to_3d(image, tier=AssetTier(tier))
+                if mode == "image"
+                else client.text_to_3d(prompt, tier=AssetTier(tier))
             )
-            task_id = client.image_to_3d(image, tier=tier_enum)
-        else:
-            if not prompt:
-                console.print(
-                    "[red]ERROR[/red] --prompt required for "
-                    "text mode."
-                )
-                sys.exit(1)
-            task_id = client.text_to_3d(
-                prompt, tier=tier_enum
-            )
-        console.print(
-            f"[cyan]Task submitted:[/cyan] {task_id}"
-        )
-        console.print(
-            "[cyan]Polling for completion...[/cyan]"
-        )
-        task = client.wait_for_task(task_id)
-    model_urls = task.get("model_urls", {})
-    console.print("[green]Done.[/green] Model URLs:")
-    for fmt, url in model_urls.items():
-        console.print(f"  {fmt}: {url}")
+            task = client.wait_for_task(task_id, mode=mode)
+            if mode == "text":
+                task_id = client.refine_text_task(task_id)
+                task = client.wait_for_task(task_id, mode="text")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for fmt, url in task.get("model_urls", {}).items():
+                if fmt not in ("glb", "fbx", "obj", "usdz", "stl") or not url:
+                    continue
+                response = httpx.get(url, follow_redirects=True, timeout=120)
+                response.raise_for_status()
+                path = out_dir / f"{task_id}.{fmt}"
+                path.write_bytes(response.content)
+                outputs.append(path)
+    console.print(f"Registered {len(outputs)} mesh output(s).")
 
 
 # ── rig ───────────────────────────────────────────────────────────────────────
 
+
 @cli.command()
-@click.argument(
-    "fbx_path", type=click.Path(exists=True, path_type=Path)
-)
+@click.argument("fbx_path", type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--skeleton",
-    type=click.Choice(
-        ["hik", "ue_mannequin", "metahuman", "custom"]
-    ),
+    type=click.Choice(["hik", "ue_mannequin", "metahuman", "custom"]),
     default="hik",
     show_default=True,
     help="Target skeleton standard.",
 )
-@click.option(
-    "--db", type=click.Path(), default=str(DEFAULT_DB)
-)
+@click.option("--db", type=click.Path(), default=_default_db)
 def rig(fbx_path: Path, skeleton: str, db: str) -> None:
     """Auto-rig an FBX mesh to HIK (Stage 5). [Phase 2]"""
-    console.print(
-        "[yellow]NOTE[/yellow] AccuRig CLI integration is "
-        "Phase 2."
-    )
+    console.print("[yellow]NOTE[/yellow] AccuRig CLI integration is Phase 2.")
     console.print(
         "  Rig manually in AccuRig, export HIK FBX, "
         "then import to MotionBuilder."
@@ -238,6 +213,7 @@ def rig(fbx_path: Path, skeleton: str, db: str) -> None:
 
 
 # ── mocap ─────────────────────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument(
@@ -250,12 +226,8 @@ def rig(fbx_path: Path, skeleton: str, db: str) -> None:
     default=False,
     help="Run Cascadeur cleanup (Phase 2).",
 )
-@click.option(
-    "--db", type=click.Path(), default=str(DEFAULT_DB)
-)
-def mocap(
-    motion_file: Path, clean: bool, db: str
-) -> None:
+@click.option("--db", type=click.Path(), default=_default_db)
+def mocap(motion_file: Path, clean: bool, db: str) -> None:
     """Ingest a BVH or FBX motion file (Stage 7)."""
     from volta.mocap.ingest import ingest_bvh, validate_mocap_file
 
@@ -269,31 +241,24 @@ def mocap(
             f"({meta['duration_s']:.1f}s)"
         )
     else:
-        console.print(
-            f"[cyan]FBX ingest:[/cyan] {motion_file}"
-        )
-        console.print(
-            "  FBX metadata extraction is Phase 2."
-        )
+        console.print(f"[cyan]FBX ingest:[/cyan] {motion_file}")
+        console.print("  FBX metadata extraction is Phase 2.")
     if clean:
-        console.print(
-            "[yellow]NOTE[/yellow] Cascadeur cleanup is Phase 2."
-        )
+        console.print("[yellow]NOTE[/yellow] Cascadeur cleanup is Phase 2.")
 
 
 # ── mocap-scan ────────────────────────────────────────────────────────────────
 
+
 @cli.command("mocap-scan")
 @click.argument(
     "library_dir",
-    type=click.Path(
-        exists=True, file_okay=False, path_type=Path
-    ),
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
 @click.option(
     "--db",
     type=click.Path(),
-    default=str(DEFAULT_DB),
+    default=_default_db,
     show_default=True,
     help="Catalog database path.",
 )
@@ -303,9 +268,7 @@ def mocap(
     default=False,
     help="Print results without writing to catalog.",
 )
-def mocap_scan(
-    library_dir: Path, db: str, dry_run: bool
-) -> None:
+def mocap_scan(library_dir: Path, db: str, dry_run: bool) -> None:
     """Bulk-register BVH/FBX motions from a library directory."""
     from volta.mocap.ingest import (
         SUPPORTED_FORMATS,
@@ -316,14 +279,12 @@ def mocap_scan(
     files = sorted(
         f
         for f in library_dir.rglob("*")
-        if f.is_file()
-        and f.suffix.lower() in SUPPORTED_FORMATS
+        if f.is_file() and f.suffix.lower() in SUPPORTED_FORMATS
     )
 
     if not files:
         console.print(
-            f"[yellow]No motion files found in:[/yellow] "
-            f"{library_dir}"
+            f"[yellow]No motion files found in:[/yellow] {library_dir}"
         )
         return
 
@@ -401,8 +362,7 @@ def mocap_scan(
     console.print(t)
     if not dry_run:
         console.print(
-            f"\n[green]Done.[/green] "
-            f"{registered} registered, {errors} errors."
+            f"\n[green]Done.[/green] {registered} registered, {errors} errors."
         )
     else:
         console.print(
@@ -413,11 +373,10 @@ def mocap_scan(
 
 # ── qa ────────────────────────────────────────────────────────────────────────
 
+
 @cli.command()
 @click.argument("asset_uid")
-@click.option(
-    "--db", type=click.Path(), default=str(DEFAULT_DB)
-)
+@click.option("--db", type=click.Path(), default=_default_db)
 def qa(asset_uid: str, db: str) -> None:
     """Run QA validation suite on a catalog asset."""
     catalog = CatalogDB(Path(db))
@@ -425,9 +384,7 @@ def qa(asset_uid: str, db: str) -> None:
     with catalog.session() as conn:
         asset = catalog.get_asset(conn, asset_uid)
         if asset is None:
-            console.print(
-                f"[red]ERROR[/red] Asset not found: {asset_uid}"
-            )
+            console.print(f"[red]ERROR[/red] Asset not found: {asset_uid}")
             sys.exit(1)
         results = run_qa_suite(asset)
         for result in results:
@@ -454,6 +411,7 @@ def qa(asset_uid: str, db: str) -> None:
 
 # ── export ────────────────────────────────────────────────────────────────────
 
+
 @cli.command()
 @click.argument(
     "input_path",
@@ -461,9 +419,7 @@ def qa(asset_uid: str, db: str) -> None:
 )
 @click.option(
     "--target",
-    type=click.Choice(
-        ["social", "film", "game", "web", "vr"]
-    ),
+    type=click.Choice(["social", "film", "game", "web", "vr"]),
     default="social",
     show_default=True,
     help="Delivery target.",
@@ -491,20 +447,14 @@ def export(
 
     tgt = ExportTarget(target)
     if tgt == ExportTarget.SOCIAL:
-        out_path = export_social(
-            input_path, out_dir, preset=preset
-        )
-        console.print(
-            f"[green]Exported:[/green] {out_path}"
-        )
+        out_path = export_social(input_path, out_dir, preset=preset)
+        console.print(f"[green]Exported:[/green] {out_path}")
     else:
-        console.print(
-            f"[yellow]NOTE[/yellow] "
-            f"'{target}' export is Phase 2."
-        )
+        console.print(f"[yellow]NOTE[/yellow] '{target}' export is Phase 2.")
 
 
 # ── run (full pipeline) ───────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument("asset_uid")
@@ -514,9 +464,7 @@ def export(
     default=None,
     help="Resume pipeline from a specific stage.",
 )
-@click.option(
-    "--db", type=click.Path(), default=str(DEFAULT_DB)
-)
+@click.option("--db", type=click.Path(), default=_default_db)
 def run(
     asset_uid: str,
     from_stage: Optional[str],
@@ -528,22 +476,15 @@ def run(
     with catalog.session() as conn:
         asset = catalog.get_asset(conn, asset_uid)
     if asset is None:
-        console.print(
-            f"[red]ERROR[/red] Asset not found: {asset_uid}"
-        )
+        console.print(f"[red]ERROR[/red] Asset not found: {asset_uid}")
         sys.exit(1)
     console.print(
-        f"[cyan]VOLTA pipeline:[/cyan] {asset.name} "
-        f"({asset_uid[:8]})"
+        f"[cyan]VOLTA pipeline:[/cyan] {asset.name} ({asset_uid[:8]})"
     )
-    console.print(
-        f"  Current stage: {asset.stage.value}"
-    )
+    console.print(f"  Current stage: {asset.stage.value}")
     if from_stage:
         console.print(f"  Resuming from: {from_stage}")
-    console.print(
-        "[yellow]Full pipeline orchestration is Phase 2.[/yellow]"
-    )
+    console.print("[yellow]Full pipeline orchestration is Phase 2.[/yellow]")
     console.print(
         "  Use individual commands per stage: "
         "generate → mesh → rig → mocap → qa → export"
@@ -551,6 +492,7 @@ def run(
 
 
 # ── bridge (ATLAS integration) ────────────────────────────────────────────────
+
 
 @cli.group()
 def bridge() -> None:
@@ -561,7 +503,7 @@ def bridge() -> None:
 @click.option(
     "--db",
     type=click.Path(),
-    default=str(DEFAULT_DB),
+    default=_default_db,
     show_default=True,
     help="Catalog database path.",
 )
@@ -597,15 +539,15 @@ def bridge_sync(db: str) -> None:
 @bridge.command(name="status")
 def bridge_status() -> None:
     """Print the current .atlas-bridge/memory.json (what ATLAS sees)."""
-    from volta.bridge.sync import _BRIDGE_DIR
     import json as _json
+
+    from volta.bridge.sync import _BRIDGE_DIR
 
     mem_path = _BRIDGE_DIR / "memory.json"
     man_path = _BRIDGE_DIR / "manifest.json"
     if not mem_path.exists():
         console.print(
-            "[red]ERROR[/red] memory.json not found. "
-            "Run: volta bridge sync"
+            "[red]ERROR[/red] memory.json not found. Run: volta bridge sync"
         )
         sys.exit(1)
 
@@ -615,16 +557,12 @@ def bridge_status() -> None:
         manifest = _json.load(f)
 
     health = memory.get("health", {})
-    t = Table(
-        title="VOLTA Bridge Status", show_header=True
-    )
+    t = Table(title="VOLTA Bridge Status", show_header=True)
     t.add_column("Field", style="cyan")
     t.add_column("Value")
     t.add_row("Project", manifest.get("project_name", "?"))
     t.add_row("Status", memory.get("status_summary", "?"))
-    t.add_row(
-        "Health", health.get("status", "unknown")
-    )
+    t.add_row("Health", health.get("status", "unknown"))
     t.add_row(
         "Days since push",
         str(health.get("days_since_push", -1)),
@@ -658,21 +596,12 @@ def bridge_status() -> None:
                 if a["severity"] == "warning"
                 else "[cyan]INFO[/cyan]"
             )
-            state = (
-                "[dim](resolved)[/dim]"
-                if a.get("resolved")
-                else ""
-            )
-            console.print(
-                f"  {icon} {a['message']} {state}"
-            )
+            state = "[dim](resolved)[/dim]" if a.get("resolved") else ""
+            console.print(f"  {icon} {a['message']} {state}")
 
     caps = manifest.get("capabilities", [])
     if caps:
-        console.print(
-            f"\n[dim]Capabilities: "
-            f"{', '.join(caps)}[/dim]"
-        )
+        console.print(f"\n[dim]Capabilities: {', '.join(caps)}[/dim]")
 
 
 @bridge.command(name="tasks")
@@ -682,9 +611,7 @@ def bridge_tasks() -> None:
 
     tasks = read_tasks()
     if not tasks:
-        console.print(
-            "[dim]No pending tasks from ATLAS.[/dim]"
-        )
+        console.print("[dim]No pending tasks from ATLAS.[/dim]")
         return
     t = Table(
         title=f"ATLAS Tasks ({len(tasks)})",
@@ -751,6 +678,7 @@ def bridge_exec(done: Optional[str], watch: bool) -> None:
     (useful when ATLAS is actively dispatching).
     """
     import time as _time
+
     from volta.bridge.sync import read_tasks, update_task_status
 
     if done:
@@ -767,16 +695,10 @@ def bridge_exec(done: Optional[str], watch: bool) -> None:
             sys.exit(1)
         tid = _task_id(match)
         if update_task_status(tid, "done"):
-            console.print(
-                f"[green]Marked done:[/green] {tid[:16]}…"
-            )
-            console.print(
-                f"  Task: {_task_text(match)[:80]}"
-            )
+            console.print(f"[green]Marked done:[/green] {tid[:16]}…")
+            console.print(f"  Task: {_task_text(match)[:80]}")
         else:
-            console.print(
-                f"[red]Could not update status for[/red] {tid}"
-            )
+            console.print(f"[red]Could not update status for[/red] {tid}")
         return
 
     seen_ids: set[str] = set()
@@ -784,34 +706,29 @@ def bridge_exec(done: Optional[str], watch: bool) -> None:
     def _process_once() -> int:
         tasks = read_tasks()
         pending = [
-            t for t in tasks
-            if t.get("status") == "pending"
-            and _task_id(t) not in seen_ids
+            t
+            for t in tasks
+            if t.get("status") == "pending" and _task_id(t) not in seen_ids
         ]
         for task in pending:
             tid = _task_id(task)
             seen_ids.add(tid)
             update_task_status(tid, "in_progress")
             console.rule(
-                f"[bold cyan]ATLAS Task[/bold cyan] "
-                f"[dim]{tid[:16]}[/dim]"
+                f"[bold cyan]ATLAS Task[/bold cyan] [dim]{tid[:16]}[/dim]"
             )
             console.print(
-                f"[bold]Project:[/bold] "
-                f"{task.get('project', 'VOLTA')}"
+                f"[bold]Project:[/bold] {task.get('project', 'VOLTA')}"
             )
             console.print(
                 f"[bold]Dispatched:[/bold] "
                 f"{task.get('created_at', '')[:16]} UTC"
             )
             console.print(
-                f"[bold]Priority:[/bold] "
-                f"{task.get('priority', 'normal')}"
+                f"[bold]Priority:[/bold] {task.get('priority', 'normal')}"
             )
             console.print()
-            console.print(
-                "[bold]Brief:[/bold]"
-            )
+            console.print("[bold]Brief:[/bold]")
             console.print(_task_text(task))
             console.print()
             console.print(
@@ -823,16 +740,11 @@ def bridge_exec(done: Optional[str], watch: bool) -> None:
 
     found = _process_once()
     if found == 0 and not watch:
-        console.print(
-            "[dim]No pending ATLAS tasks.[/dim]"
-        )
+        console.print("[dim]No pending ATLAS tasks.[/dim]")
         return
 
     if watch:
-        console.print(
-            "[dim]Watching for new tasks "
-            "(Ctrl-C to stop)...[/dim]"
-        )
+        console.print("[dim]Watching for new tasks (Ctrl-C to stop)...[/dim]")
         try:
             while True:
                 _time.sleep(10)
@@ -842,6 +754,7 @@ def bridge_exec(done: Optional[str], watch: bool) -> None:
 
 
 # ── ue (Unreal Engine integration) ──────────────────────────────────────────
+
 
 @cli.group()
 def ue() -> None:
@@ -855,18 +768,26 @@ def ue_status(timeout: float) -> None:
     from volta.unreal.client import UnrealRemoteClient
 
     client = UnrealRemoteClient()
-    console.print("[dim]Pinging Unreal Engine nodes (UDP 239.0.0.1:6766)...[/dim]")
+    console.print(
+        "[dim]Pinging Unreal Engine nodes (UDP 239.0.0.1:6766)...[/dim]"
+    )
     connected = client.connect(timeout_sec=timeout)
     if connected:
         console.print("[green]Connected to Unreal Engine Editor![/green]")
-        res = client.run_python('import unreal; print("Active project:", unreal.Paths.project_dir())')
+        res = client.run_python(
+            'import unreal; print("Active project:", unreal.Paths.project_dir())'
+        )
         output = res.get("output", [])
         for line in output:
             console.print(f"  [cyan]{line.get('output', '')}[/cyan]")
         client.disconnect()
     else:
-        console.print("[yellow]No active Unreal Engine editor detected with Remote Execution enabled.[/yellow]")
-        console.print("  [dim]Tip: In UE, ensure 'Python Editor Script Plugin' and 'Enable Remote Execution' are enabled.[/dim]")
+        console.print(
+            "[yellow]No active Unreal Engine editor detected with Remote Execution enabled.[/yellow]"
+        )
+        console.print(
+            "  [dim]Tip: In UE, ensure 'Python Editor Script Plugin' and 'Enable Remote Execution' are enabled.[/dim]"
+        )
 
 
 @ue.command(name="fab-list")
@@ -896,7 +817,9 @@ def ue_fab_list(cache: str) -> None:
     for item in items:
         mesh_summary = f"{len(item['meshes'])} file(s)"
         if item["meshes"]:
-            mesh_summary += f" ({sum(m['size_mb'] for m in item['meshes']):.1f} MB)"
+            mesh_summary += (
+                f" ({sum(m['size_mb'] for m in item['meshes']):.1f} MB)"
+            )
         tex_summary = f"{len(item['textures'])} map(s)"
         t.add_row(
             item["title"],
@@ -925,10 +848,84 @@ def ue_export_fab(asset_query: str, dest_dir: str, cache: str) -> None:
     fab = FabLibrary(Path(cache))
     try:
         res = fab.export_to_project(asset_query, Path(dest_dir))
-        console.print(f"[green]Successfully exported '{res['title']}' to {dest_dir}:[/green]")
+        console.print(
+            f"[green]Successfully exported '{res['title']}' to {dest_dir}:[/green]"
+        )
         for m in res["meshes"]:
             console.print(f"  [cyan]Mesh:[/cyan] {Path(m).name}")
         for t in res["textures"]:
             console.print(f"  [dim]Texture:[/dim] {Path(t).name}")
     except Exception as e:
         console.print(f"[red]Error exporting asset:[/red] {e}")
+
+
+@cli.command()
+@click.argument("asset_uid")
+@click.option("--db", type=click.Path(), default=_default_db)
+def approve(asset_uid, db):
+    """Record explicit human asset approval."""
+    _set_approval(asset_uid, db, "approved")
+
+
+@cli.command()
+@click.argument("asset_uid")
+@click.option("--db", type=click.Path(), default=_default_db)
+def reject(asset_uid, db):
+    """Record explicit human asset rejection."""
+    _set_approval(asset_uid, db, "rejected")
+
+
+def _set_approval(uid, db, status):
+    catalog = CatalogDB(Path(db))
+    catalog.init()
+    with catalog.session() as conn:
+        asset = catalog.get_asset(conn, uid)
+        if asset is None:
+            raise click.ClickException(f"Asset not found: {uid}")
+        asset.approval_status = status
+        catalog.upsert_asset(conn, asset)
+
+
+@cli.command("pipeline")
+@click.argument("keyframes", type=click.Path(exists=True, path_type=Path))
+@click.argument("video", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--vision-qc",
+    is_flag=True,
+    help="Run advisory local Ollama vision QC without gating video.",
+)
+@click.option(
+    "--out-dir", type=click.Path(path_type=Path), default=Path("output")
+)
+@click.option("--host", default="http://localhost:8188")
+@click.option("--db", type=click.Path(), default=_default_db)
+def pipeline_command(keyframes, video, vision_qc, out_dir, host, db):
+    """Run keyframe and video workflows; video must already reference server keyframes.
+
+    Workflow wiring stays explicit; this command does not guess LoadImage nodes.
+    """
+    from volta.comfy.client import ComfyClient
+    from volta.pipeline import catalogued_stage, keyframe_to_video
+
+    def stage(workflow, output, stage_kind):
+        with catalogued_stage(
+            Path(db), workflow, stage_kind, "comfy"
+        ) as paths:
+            with ComfyClient(host=host) as client:
+                history = client.wait_for_prompt(
+                    client.queue_prompt(client.load_workflow(workflow))
+                )
+                paths.extend(client.download_outputs(history, output))
+        return paths
+
+    result, qc = keyframe_to_video(
+        lambda: stage(
+            keyframes, out_dir / "keyframes", PipelineStage.KEYFRAME
+        ),
+        lambda paths: stage(video, out_dir / "video", PipelineStage.VIDEO),
+        vision_qc=vision_qc,
+        report=out_dir / "vision-qc.json",
+    )
+    console.print(
+        f"Video outputs: {len(result)}; QC is advisory (see vision-qc.json when enabled)."
+    )
